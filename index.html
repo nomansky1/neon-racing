@@ -104,6 +104,18 @@ var totalLaps;
 var countdownTimer = 0;
 var countdownNum = 3;
 
+// Day/night cycle
+var dayNightTime = 0;
+var DAY_CYCLE_SPEED = 0.015; // full cycle ~420s
+var ambientLight, dirLight, hemiLight;
+var skyColors = {
+    day:   { sky: 0x5588cc, fog: 0x88aacc, ambient: 0x8899bb, dir: 0xffeedd, hemi: 0x88bbff, ground: 0x445566, exposure: 1.8 },
+    dusk:  { sky: 0x331844, fog: 0x221133, ambient: 0x554466, dir: 0xff6633, hemi: 0x553366, ground: 0x221122, exposure: 1.2 },
+    night: { sky: 0x020010, fog: 0x020010, ambient: 0x222244, dir: 0x4444aa, hemi: 0x111133, ground: 0x050510, exposure: 0.8 },
+    dawn:  { sky: 0x443355, fog: 0x332244, ambient: 0x665577, dir: 0xffaa55, hemi: 0x554477, ground: 0x332233, exposure: 1.3 }
+};
+var clouds = [];
+
 // Controls
 var input = { left:false, right:false, gas:false, brake:false, nos:false };
 
@@ -155,10 +167,13 @@ function initThree() {
     clock = new THREE.Clock();
 
     // Lights
-    var ambient = new THREE.AmbientLight(0x222244, 0.6);
-    scene.add(ambient);
+    ambientLight = new THREE.AmbientLight(0x222244, 0.6);
+    scene.add(ambientLight);
 
-    var dirLight = new THREE.DirectionalLight(0x8888ff, 0.4);
+    hemiLight = new THREE.HemisphereLight(0x88bbff, 0x111133, 0.3);
+    scene.add(hemiLight);
+
+    dirLight = new THREE.DirectionalLight(0x8888ff, 0.4);
     dirLight.position.set(50, 80, 50);
     dirLight.castShadow = true;
     dirLight.shadow.mapSize.set(1024, 1024);
@@ -178,17 +193,124 @@ function initThree() {
     ground.position.y = -0.1;
     ground.receiveShadow = true;
     scene.add(ground);
+    // store ref for day/night color changes
+    ground.userData.isGround = true;
 
     // Grid helper for neon feel
     var grid = new THREE.GridHelper(2000, 200, 0x1a0033, 0x0a0015);
     grid.position.y = -0.05;
     scene.add(grid);
 
+    // Clouds
+    createClouds();
+    // Start at dawn
+    dayNightTime = 0.75;
+
     window.addEventListener('resize', function() {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
     });
+}
+
+// ================================================================
+//  CLOUDS
+// ================================================================
+function createClouds() {
+    for (var i = 0; i < 25; i++) {
+        var group = new THREE.Group();
+        // Each cloud = cluster of spheres
+        var numPuffs = 3 + Math.floor(Math.random() * 5);
+        var cloudMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 });
+        for (var p = 0; p < numPuffs; p++) {
+            var r = 8 + Math.random() * 15;
+            var puffGeo = new THREE.SphereGeometry(r, 7, 5);
+            var puff = new THREE.Mesh(puffGeo, cloudMat.clone());
+            puff.position.set((Math.random() - 0.5) * 30, (Math.random() - 0.5) * 5, (Math.random() - 0.5) * 15);
+            puff.scale.y = 0.4 + Math.random() * 0.3;
+            group.add(puff);
+        }
+        var angle = Math.random() * Math.PI * 2;
+        var dist = 100 + Math.random() * 500;
+        group.position.set(Math.cos(angle) * dist, 50 + Math.random() * 40, Math.sin(angle) * dist);
+        group.userData.driftX = (Math.random() - 0.5) * 2;
+        group.userData.driftZ = (Math.random() - 0.5) * 2;
+        scene.add(group);
+        clouds.push(group);
+    }
+}
+
+function updateClouds(dt) {
+    for (var i = 0; i < clouds.length; i++) {
+        var c = clouds[i];
+        c.position.x += c.userData.driftX * dt;
+        c.position.z += c.userData.driftZ * dt;
+        // Wrap around
+        if (c.position.x > 600) c.position.x = -600;
+        if (c.position.x < -600) c.position.x = 600;
+        if (c.position.z > 600) c.position.z = -600;
+        if (c.position.z < -600) c.position.z = 600;
+    }
+}
+
+// ================================================================
+//  DAY/NIGHT CYCLE
+// ================================================================
+function lerpColor(a, b, t) {
+    var ca = new THREE.Color(a);
+    var cb = new THREE.Color(b);
+    return ca.lerp(cb, t);
+}
+
+function updateDayNight(dt) {
+    dayNightTime = (dayNightTime + DAY_CYCLE_SPEED * dt) % 1;
+
+    // 0-0.25 = day, 0.25-0.5 = dusk, 0.5-0.75 = night, 0.75-1.0 = dawn
+    var phase, t;
+    var fromKey, toKey;
+    if (dayNightTime < 0.25) {
+        fromKey = 'day'; toKey = 'day'; t = 0;
+    } else if (dayNightTime < 0.35) {
+        fromKey = 'day'; toKey = 'dusk'; t = (dayNightTime - 0.25) / 0.1;
+    } else if (dayNightTime < 0.5) {
+        fromKey = 'dusk'; toKey = 'night'; t = (dayNightTime - 0.35) / 0.15;
+    } else if (dayNightTime < 0.75) {
+        fromKey = 'night'; toKey = 'night'; t = 0;
+    } else if (dayNightTime < 0.85) {
+        fromKey = 'night'; toKey = 'dawn'; t = (dayNightTime - 0.75) / 0.1;
+    } else {
+        fromKey = 'dawn'; toKey = 'day'; t = (dayNightTime - 0.85) / 0.15;
+    }
+
+    var from = skyColors[fromKey];
+    var to = skyColors[toKey];
+
+    scene.background = lerpColor(from.sky, to.sky, t);
+    scene.fog.color = lerpColor(from.fog, to.fog, t);
+    ambientLight.color = lerpColor(from.ambient, to.ambient, t);
+    dirLight.color = lerpColor(from.dir, to.dir, t);
+    hemiLight.color = lerpColor(from.hemi, to.hemi, t);
+    hemiLight.groundColor = lerpColor(from.ground, to.ground, t);
+
+    var exposure = from.exposure + (to.exposure - from.exposure) * t;
+    renderer.toneMappingExposure = exposure;
+
+    // Sun position
+    var sunAngle = dayNightTime * Math.PI * 2;
+    dirLight.position.set(Math.cos(sunAngle) * 80, Math.sin(sunAngle) * 80 + 20, 50);
+    dirLight.intensity = 0.2 + Math.max(0, Math.sin(sunAngle)) * 0.8;
+
+    // Cloud opacity based on time of day
+    var cloudOp = dayNightTime < 0.5 ? 0.15 + (0.25 - Math.abs(dayNightTime - 0.25)) * 1.0 : 0.08;
+    for (var i = 0; i < clouds.length; i++) {
+        var c = clouds[i];
+        c.traverse(function(child) {
+            if (child.material && child.material.opacity !== undefined) {
+                child.material.opacity = Math.min(0.45, cloudOp);
+                child.material.color = lerpColor(from.sky, 0xffffff, 0.7 + t * 0.3);
+            }
+        });
+    }
 }
 
 // ================================================================
@@ -374,6 +496,57 @@ function buildLaneMarkings() {
     scene.add(sl);
 }
 
+function addWindowGrid(bx, by, bz, bw, bh, bd, zone) {
+    // Add lit window grids on each visible face
+    var wColors = zone === 'neon' ? [0x8a2be2, 0xff00ff, 0x4444ff] :
+                  zone === 'city' ? [0xffdd88, 0x88bbff, 0x334455] :
+                  [0xffcc66, 0x556688, 0x333344];
+
+    var faces = [
+        { axis: 'x', dir: 1, w: bd, h: bh, px: bx + bw * 0.501, py: by, pz: bz, ry: Math.PI / 2 },
+        { axis: 'x', dir: -1, w: bd, h: bh, px: bx - bw * 0.501, py: by, pz: bz, ry: -Math.PI / 2 },
+        { axis: 'z', dir: 1, w: bw, h: bh, px: bx, py: by, pz: bz + bd * 0.501, ry: 0 },
+        { axis: 'z', dir: -1, w: bw, h: bh, px: bx, py: by, pz: bz - bd * 0.501, ry: Math.PI }
+    ];
+
+    for (var f = 0; f < faces.length; f++) {
+        var face = faces[f];
+        var cols = Math.max(1, Math.floor(face.w / 1.2));
+        var rows = Math.max(1, Math.floor(face.h / 1.5));
+        var winW = face.w * 0.7 / cols;
+        var winH = face.h * 0.6 / rows;
+
+        for (var r = 0; r < rows; r++) {
+            for (var c = 0; c < cols; c++) {
+                if (Math.random() < 0.3) continue; // some windows dark
+                var wGeo = new THREE.PlaneGeometry(winW * 0.7, winH * 0.6);
+                var wColor = wColors[Math.floor(Math.random() * wColors.length)];
+                var wMat = new THREE.MeshBasicMaterial({
+                    color: wColor,
+                    transparent: true,
+                    opacity: 0.3 + Math.random() * 0.5
+                });
+                var wMesh = new THREE.Mesh(wGeo, wMat);
+
+                var offX = (c - (cols - 1) / 2) * (face.w * 0.8 / cols);
+                var offY = (r - (rows - 1) / 2) * (face.h * 0.7 / rows);
+
+                wMesh.position.set(face.px, face.py + offY, face.pz);
+                wMesh.rotation.y = face.ry;
+
+                // Shift along face's local axis
+                if (face.axis === 'x') {
+                    wMesh.position.z += offX;
+                } else {
+                    wMesh.position.x += offX;
+                }
+
+                scene.add(wMesh);
+            }
+        }
+    }
+}
+
 function placeBuildings() {
     var numBuildings = 80;
     for (var i = 0; i < numBuildings; i++) {
@@ -405,17 +578,19 @@ function placeBuildings() {
         scene.add(mesh);
         buildings.push(mesh);
 
-        // Window lights
-        if (bh > 8 && Math.random() < 0.5) {
-            var windowGeo = new THREE.PlaneGeometry(bw * 0.8, bh * 0.7);
-            var windowMat = new THREE.MeshBasicMaterial({
-                color: zone === 'neon' ? 0x6a1bb2 : 0x334455,
-                transparent: true, opacity: 0.4
-            });
-            var windowMesh = new THREE.Mesh(windowGeo, windowMat);
-            windowMesh.position.set(pos.x + side * bw * 0.501, bh / 2, pos.z);
-            windowMesh.rotation.y = side > 0 ? Math.PI / 2 : -Math.PI / 2;
-            scene.add(windowMesh);
+        // Window grids on all faces
+        if (bh > 5) {
+            addWindowGrid(pos.x, bh / 2, pos.z, bw, bh, bd, zone);
+        }
+
+        // Rooftop accent light for taller buildings
+        if (bh > 12) {
+            var roofLight = new THREE.Mesh(
+                new THREE.BoxGeometry(bw * 0.3, 0.2, bd * 0.3),
+                new THREE.MeshBasicMaterial({ color: emColor })
+            );
+            roofLight.position.set(pos.x, bh + 0.1, pos.z);
+            scene.add(roofLight);
         }
     }
 }
@@ -468,171 +643,288 @@ function getTerrainZone(t) {
 // ================================================================
 function buildCar(color, isPlayer) {
     var group = new THREE.Group();
+    var bLen = 2.6, bWid = 1.1;
 
-    // --- Main Body ---
-    var bodyShape = new THREE.Shape();
-    // Top-down car shape extruded
-    var bLen = 2.4, bWid = 1.0;
-
-    // Lower body
-    var lowerGeo = new THREE.BoxGeometry(bWid, 0.35, bLen);
     var bodyMat = new THREE.MeshStandardMaterial({
-        color: color,
-        metalness: 0.7,
-        roughness: 0.2,
-        emissive: color,
-        emissiveIntensity: 0.15
+        color: color, metalness: 0.75, roughness: 0.15,
+        emissive: color, emissiveIntensity: 0.12
     });
+    var darkMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.5, metalness: 0.3 });
+    var chromeMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.95, roughness: 0.05 });
+    var glassMat = new THREE.MeshStandardMaterial({
+        color: 0x112244, metalness: 0.9, roughness: 0.05, transparent: true, opacity: 0.65
+    });
+
+    // --- Lower body (rounded) ---
+    var lowerShape = new THREE.Shape();
+    var hw = bWid / 2, hl = bLen / 2;
+    lowerShape.moveTo(-hw + 0.15, -hl);
+    lowerShape.lineTo(hw - 0.15, -hl);
+    lowerShape.quadraticCurveTo(hw, -hl, hw, -hl + 0.15);
+    lowerShape.lineTo(hw, hl - 0.2);
+    lowerShape.quadraticCurveTo(hw, hl, hw - 0.2, hl);
+    lowerShape.lineTo(-hw + 0.2, hl);
+    lowerShape.quadraticCurveTo(-hw, hl, -hw, hl - 0.2);
+    lowerShape.lineTo(-hw, -hl + 0.15);
+    lowerShape.quadraticCurveTo(-hw, -hl, -hw + 0.15, -hl);
+
+    var extrudeSettings = { depth: 0.35, bevelEnabled: true, bevelThickness: 0.03, bevelSize: 0.03, bevelSegments: 3 };
+    var lowerGeo = new THREE.ExtrudeGeometry(lowerShape, extrudeSettings);
+    lowerGeo.rotateX(-Math.PI / 2);
     var lower = new THREE.Mesh(lowerGeo, bodyMat);
-    lower.position.y = 0.35;
+    lower.position.y = 0.18;
     lower.castShadow = true;
     group.add(lower);
 
-    // Upper body (cabin)
-    var cabGeo = new THREE.BoxGeometry(bWid * 0.85, 0.3, bLen * 0.45);
-    var cabMat = new THREE.MeshStandardMaterial({
-        color: color,
-        metalness: 0.6,
-        roughness: 0.25,
-        emissive: color,
-        emissiveIntensity: 0.1
-    });
-    var cabin = new THREE.Mesh(cabGeo, cabMat);
-    cabin.position.set(0, 0.65, -bLen * 0.05);
+    // --- Upper body / cabin (tapered) ---
+    var cabShape = new THREE.Shape();
+    var cw = bWid * 0.42, cl = bLen * 0.22;
+    cabShape.moveTo(-cw, -cl);
+    cabShape.lineTo(cw, -cl);
+    cabShape.lineTo(cw * 0.85, cl);
+    cabShape.lineTo(-cw * 0.85, cl);
+    cabShape.closePath();
+    var cabExtrude = { depth: 0.32, bevelEnabled: true, bevelThickness: 0.02, bevelSize: 0.04, bevelSegments: 3 };
+    var cabGeo = new THREE.ExtrudeGeometry(cabShape, cabExtrude);
+    cabGeo.rotateX(-Math.PI / 2);
+    var cabin = new THREE.Mesh(cabGeo, bodyMat);
+    cabin.position.set(0, 0.53, -bLen * 0.04);
     cabin.castShadow = true;
     group.add(cabin);
 
-    // Windshield (front)
-    var wsGeo = new THREE.PlaneGeometry(bWid * 0.75, 0.28);
-    var wsMat = new THREE.MeshStandardMaterial({
-        color: 0x112244,
-        metalness: 0.9,
-        roughness: 0.1,
-        transparent: true,
-        opacity: 0.7
-    });
-    var ws = new THREE.Mesh(wsGeo, wsMat);
-    ws.position.set(0, 0.67, -bLen * 0.05 + bLen * 0.225 + 0.01);
-    ws.rotation.x = 0.2;
+    // --- Front hood (curved) ---
+    var hoodGeo = new THREE.BoxGeometry(bWid * 0.9, 0.06, bLen * 0.28);
+    var hood = new THREE.Mesh(hoodGeo, bodyMat);
+    hood.position.set(0, 0.52, bLen * 0.28);
+    group.add(hood);
+
+    // --- Front splitter ---
+    var splitGeo = new THREE.BoxGeometry(bWid * 1.05, 0.03, 0.15);
+    var splitter = new THREE.Mesh(splitGeo, darkMat);
+    splitter.position.set(0, 0.17, bLen * 0.5);
+    group.add(splitter);
+
+    // --- Rear diffuser ---
+    var diffGeo = new THREE.BoxGeometry(bWid * 0.95, 0.08, 0.2);
+    var diffuser = new THREE.Mesh(diffGeo, darkMat);
+    diffuser.position.set(0, 0.18, -bLen * 0.48);
+    group.add(diffuser);
+    // Diffuser fins
+    for (var df = -2; df <= 2; df++) {
+        var finGeo = new THREE.BoxGeometry(0.02, 0.06, 0.18);
+        var fin = new THREE.Mesh(finGeo, darkMat);
+        fin.position.set(df * 0.12, 0.19, -bLen * 0.48);
+        group.add(fin);
+    }
+
+    // --- Side skirts ---
+    for (var sk = -1; sk <= 1; sk += 2) {
+        var skirtGeo = new THREE.BoxGeometry(0.06, 0.1, bLen * 0.7);
+        var skirt = new THREE.Mesh(skirtGeo, darkMat);
+        skirt.position.set(sk * bWid * 0.52, 0.17, 0);
+        group.add(skirt);
+    }
+
+    // --- Fenders (wheel arches) ---
+    var fenderGeo = new THREE.TorusGeometry(0.22, 0.04, 6, 10, Math.PI);
+    var fenderPositions = [
+        [-bWid * 0.5, 0.2, bLen * 0.32],
+        [bWid * 0.5, 0.2, bLen * 0.32],
+        [-bWid * 0.5, 0.2, -bLen * 0.32],
+        [bWid * 0.5, 0.2, -bLen * 0.32]
+    ];
+    for (var fi = 0; fi < fenderPositions.length; fi++) {
+        var fender = new THREE.Mesh(fenderGeo, bodyMat);
+        fender.position.set(fenderPositions[fi][0], fenderPositions[fi][1], fenderPositions[fi][2]);
+        fender.rotation.y = (fi % 2 === 0) ? -Math.PI / 2 : Math.PI / 2;
+        fender.rotation.z = Math.PI;
+        group.add(fender);
+    }
+
+    // --- Windshield (angled) ---
+    var wsGeo = new THREE.PlaneGeometry(bWid * 0.72, 0.3);
+    var ws = new THREE.Mesh(wsGeo, glassMat);
+    ws.position.set(0, 0.7, bLen * 0.12);
+    ws.rotation.x = 0.35;
     group.add(ws);
 
+    // Side windows
+    for (var sw = -1; sw <= 1; sw += 2) {
+        var swGeo = new THREE.PlaneGeometry(bLen * 0.2, 0.22);
+        var swMesh = new THREE.Mesh(swGeo, glassMat);
+        swMesh.position.set(sw * bWid * 0.43, 0.68, -bLen * 0.04);
+        swMesh.rotation.y = sw * Math.PI / 2;
+        group.add(swMesh);
+    }
+
     // Rear window
-    var rwGeo = new THREE.PlaneGeometry(bWid * 0.7, 0.22);
-    var rw = new THREE.Mesh(rwGeo, wsMat);
-    rw.position.set(0, 0.65, -bLen * 0.05 - bLen * 0.225 - 0.01);
-    rw.rotation.x = -0.15;
+    var rwGeo = new THREE.PlaneGeometry(bWid * 0.65, 0.22);
+    var rw = new THREE.Mesh(rwGeo, glassMat);
+    rw.position.set(0, 0.68, -bLen * 0.18);
+    rw.rotation.x = -0.25;
     rw.rotation.y = Math.PI;
     group.add(rw);
 
-    // Hood scoop
-    var scoopGeo = new THREE.BoxGeometry(0.2, 0.08, 0.3);
-    var scoopMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.5 });
-    var scoop = new THREE.Mesh(scoopGeo, scoopMat);
-    scoop.position.set(0, 0.56, bLen * 0.3);
+    // --- Hood scoop ---
+    var scoopGeo = new THREE.BoxGeometry(0.22, 0.1, 0.25);
+    var scoop = new THREE.Mesh(scoopGeo, darkMat);
+    scoop.position.set(0, 0.57, bLen * 0.3);
     group.add(scoop);
 
-    // Spoiler
-    var spoilerGeo = new THREE.BoxGeometry(bWid * 0.9, 0.04, 0.15);
-    var spoilerMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.5 });
-    var spoiler = new THREE.Mesh(spoilerGeo, spoilerMat);
-    spoiler.position.set(0, 0.82, -bLen * 0.42);
-    group.add(spoiler);
+    // --- Roof fin / antenna ---
+    var antGeo = new THREE.BoxGeometry(0.03, 0.12, 0.08);
+    var ant = new THREE.Mesh(antGeo, darkMat);
+    ant.position.set(0, 0.88, -bLen * 0.08);
+    group.add(ant);
 
-    // Spoiler supports
+    // --- Spoiler (GT wing) ---
+    var spoilerGeo = new THREE.BoxGeometry(bWid * 1.0, 0.04, 0.18);
+    var spoiler = new THREE.Mesh(spoilerGeo, darkMat);
+    spoiler.position.set(0, 0.88, -bLen * 0.42);
+    group.add(spoiler);
+    // Spoiler endplates
+    for (var sp = -1; sp <= 1; sp += 2) {
+        var epGeo = new THREE.BoxGeometry(0.03, 0.12, 0.22);
+        var ep = new THREE.Mesh(epGeo, darkMat);
+        ep.position.set(sp * bWid * 0.5, 0.84, -bLen * 0.42);
+        group.add(ep);
+    }
+    // Spoiler supports (swan neck)
     for (var ss = -1; ss <= 1; ss += 2) {
-        var supGeo = new THREE.BoxGeometry(0.04, 0.15, 0.04);
-        var sup = new THREE.Mesh(supGeo, spoilerMat);
-        sup.position.set(ss * bWid * 0.35, 0.74, -bLen * 0.42);
+        var supGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.2, 6);
+        var sup = new THREE.Mesh(supGeo, chromeMat);
+        sup.position.set(ss * bWid * 0.3, 0.78, -bLen * 0.42);
         group.add(sup);
     }
 
-    // Headlights
+    // --- Headlights (complex) ---
     for (var hl = -1; hl <= 1; hl += 2) {
-        var hlGeo = new THREE.SphereGeometry(0.08, 8, 8);
+        // Housing
+        var hlHousingGeo = new THREE.BoxGeometry(0.22, 0.1, 0.08);
+        var hlHousing = new THREE.Mesh(hlHousingGeo, darkMat);
+        hlHousing.position.set(hl * bWid * 0.33, 0.4, bLen * 0.5);
+        group.add(hlHousing);
+        // Bulb
+        var hlGeo = new THREE.SphereGeometry(0.06, 10, 10);
         var hlMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
         var hlMesh = new THREE.Mesh(hlGeo, hlMat);
-        hlMesh.position.set(hl * bWid * 0.35, 0.38, bLen * 0.5);
+        hlMesh.position.set(hl * bWid * 0.33, 0.4, bLen * 0.51);
         group.add(hlMesh);
+        // DRL strip
+        var drlGeo = new THREE.BoxGeometry(0.18, 0.02, 0.02);
+        var drlMat = new THREE.MeshBasicMaterial({ color: 0xccddff });
+        var drl = new THREE.Mesh(drlGeo, drlMat);
+        drl.position.set(hl * bWid * 0.33, 0.36, bLen * 0.51);
+        group.add(drl);
 
         if (isPlayer) {
-            var hlLight = new THREE.SpotLight(0xffffff, 2, 30, 0.4, 0.5);
-            hlLight.position.set(hl * bWid * 0.35, 0.38, bLen * 0.5);
-            hlLight.target.position.set(hl * bWid * 0.2, 0, bLen * 0.5 + 10);
+            var hlLight = new THREE.SpotLight(0xffffff, 2.5, 35, 0.35, 0.5);
+            hlLight.position.set(hl * bWid * 0.33, 0.4, bLen * 0.5);
+            hlLight.target.position.set(hl * bWid * 0.15, 0, bLen * 0.5 + 12);
             group.add(hlLight);
             group.add(hlLight.target);
         }
     }
 
-    // Tail lights
+    // --- Tail lights (LED strip style) ---
+    group.userData.tailLights = [];
     for (var tl = -1; tl <= 1; tl += 2) {
-        var tlGeo = new THREE.BoxGeometry(0.15, 0.06, 0.04);
+        var tlGeo = new THREE.BoxGeometry(0.2, 0.04, 0.03);
         var tlMat = new THREE.MeshBasicMaterial({ color: 0xff0022 });
         var tlMesh = new THREE.Mesh(tlGeo, tlMat);
-        tlMesh.position.set(tl * bWid * 0.35, 0.38, -bLen * 0.5);
+        tlMesh.position.set(tl * bWid * 0.3, 0.4, -bLen * 0.5);
         group.add(tlMesh);
-        // Store reference for brake light effect
-        if (!group.userData.tailLights) group.userData.tailLights = [];
         group.userData.tailLights.push(tlMesh);
+        // Lower accent
+        var tlAccent = new THREE.Mesh(
+            new THREE.BoxGeometry(0.15, 0.02, 0.03),
+            new THREE.MeshBasicMaterial({ color: 0xff4400 })
+        );
+        tlAccent.position.set(tl * bWid * 0.3, 0.36, -bLen * 0.5);
+        group.add(tlAccent);
     }
+    // Center tail light strip
+    var ctlGeo = new THREE.BoxGeometry(bWid * 0.3, 0.02, 0.02);
+    var ctlMat = new THREE.MeshBasicMaterial({ color: 0xff0022 });
+    var ctl = new THREE.Mesh(ctlGeo, ctlMat);
+    ctl.position.set(0, 0.4, -bLen * 0.5);
+    group.add(ctl);
 
-    // Side mirrors
+    // --- Side mirrors ---
     for (var sm = -1; sm <= 1; sm += 2) {
-        var mirGeo = new THREE.BoxGeometry(0.12, 0.06, 0.08);
-        var mirMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.8 });
-        var mir = new THREE.Mesh(mirGeo, mirMat);
-        mir.position.set(sm * (bWid * 0.52), 0.55, bLen * 0.1);
+        // Arm
+        var armGeo = new THREE.BoxGeometry(0.14, 0.03, 0.03);
+        var arm = new THREE.Mesh(armGeo, darkMat);
+        arm.position.set(sm * (bWid * 0.53), 0.57, bLen * 0.08);
+        group.add(arm);
+        // Mirror head
+        var mirGeo = new THREE.BoxGeometry(0.08, 0.06, 0.06);
+        var mir = new THREE.Mesh(mirGeo, chromeMat);
+        mir.position.set(sm * (bWid * 0.59), 0.57, bLen * 0.08);
         group.add(mir);
     }
 
-    // Wheels
-    var wheelGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.12, 12);
-    var wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.3 });
+    // --- Wheels (high-poly with brake discs) ---
+    var tireGeo = new THREE.TorusGeometry(0.18, 0.07, 10, 20);
+    var tireMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.85 });
+    var rimGeo = new THREE.CylinderGeometry(0.14, 0.14, 0.1, 12);
+    var rimMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.95, roughness: 0.05 });
+    var brakeGeo = new THREE.CylinderGeometry(0.1, 0.1, 0.04, 10);
+    var brakeMat = new THREE.MeshStandardMaterial({ color: 0x993333, metalness: 0.3 });
+
     var wheelPositions = [
-        [-bWid * 0.5, 0.18, bLen * 0.32],
-        [bWid * 0.5, 0.18, bLen * 0.32],
-        [-bWid * 0.5, 0.18, -bLen * 0.32],
-        [bWid * 0.5, 0.18, -bLen * 0.32]
+        [-bWid * 0.52, 0.18, bLen * 0.34],
+        [bWid * 0.52, 0.18, bLen * 0.34],
+        [-bWid * 0.52, 0.18, -bLen * 0.34],
+        [bWid * 0.52, 0.18, -bLen * 0.34]
     ];
 
     group.userData.wheels = [];
     for (var wi = 0; wi < wheelPositions.length; wi++) {
-        var wheel = new THREE.Mesh(wheelGeo, wheelMat);
-        wheel.rotation.z = Math.PI / 2;
-        wheel.position.set(wheelPositions[wi][0], wheelPositions[wi][1], wheelPositions[wi][2]);
-        wheel.castShadow = true;
-        group.add(wheel);
-        group.userData.wheels.push(wheel);
-
-        // Tire rim detail
-        var rimGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.13, 6);
-        var rimMat = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.9, roughness: 0.1 });
+        var wheelGroup = new THREE.Group();
+        // Tire
+        var tire = new THREE.Mesh(tireGeo, tireMat);
+        tire.rotation.y = Math.PI / 2;
+        wheelGroup.add(tire);
+        // Rim
         var rim = new THREE.Mesh(rimGeo, rimMat);
         rim.rotation.z = Math.PI / 2;
-        rim.position.set(wheelPositions[wi][0], wheelPositions[wi][1], wheelPositions[wi][2]);
-        group.add(rim);
+        wheelGroup.add(rim);
+        // Brake disc
+        var brake = new THREE.Mesh(brakeGeo, brakeMat);
+        brake.rotation.z = Math.PI / 2;
+        wheelGroup.add(brake);
+        // Spoke detail
+        for (var sp2 = 0; sp2 < 5; sp2++) {
+            var spokeGeo = new THREE.BoxGeometry(0.13, 0.02, 0.015);
+            var spoke = new THREE.Mesh(spokeGeo, rimMat);
+            spoke.rotation.z = (sp2 / 5) * Math.PI;
+            wheelGroup.add(spoke);
+        }
+
+        wheelGroup.position.set(wheelPositions[wi][0], wheelPositions[wi][1], wheelPositions[wi][2]);
+        wheelGroup.castShadow = true;
+        group.add(wheelGroup);
+        group.userData.wheels.push(wheelGroup);
     }
 
-    // Exhaust pipes
+    // --- Exhaust tips (chrome) ---
     for (var ex = -1; ex <= 1; ex += 2) {
-        var exGeo = new THREE.CylinderGeometry(0.04, 0.05, 0.15, 8);
-        var exMat = new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.8 });
-        var exMesh = new THREE.Mesh(exGeo, exMat);
+        var exGeo = new THREE.CylinderGeometry(0.035, 0.05, 0.18, 10);
+        var exMesh = new THREE.Mesh(exGeo, chromeMat);
         exMesh.rotation.x = Math.PI / 2;
-        exMesh.position.set(ex * 0.2, 0.2, -bLen * 0.52);
+        exMesh.position.set(ex * 0.22, 0.2, -bLen * 0.54);
         group.add(exMesh);
     }
 
-    // Underbody neon glow
-    var underGeo = new THREE.PlaneGeometry(bWid * 0.8, bLen * 0.8);
+    // --- Underbody neon glow ---
+    var underGeo = new THREE.PlaneGeometry(bWid * 0.85, bLen * 0.85);
     var underMat = new THREE.MeshBasicMaterial({
-        color: color,
-        transparent: true,
-        opacity: 0.15,
-        side: THREE.DoubleSide
+        color: color, transparent: true, opacity: 0.2, side: THREE.DoubleSide
     });
     var under = new THREE.Mesh(underGeo, underMat);
     under.rotation.x = -Math.PI / 2;
-    under.position.y = 0.05;
+    under.position.y = 0.03;
     group.add(under);
 
     // Car data
@@ -1176,16 +1468,19 @@ function updateCamera(dt) {
     var tan = trackCurve.getTangentAt(t).normalize();
     var right = new THREE.Vector3(-tan.z, 0, tan.x);
 
-    // Behind and above car
+    // Close behind car — tighter racing cam
     var camTarget = pt.clone().addScaledVector(right, playerCar.userData.laneOffset);
+    var spdFactor = Math.min(playerCar.userData.speed / playerCar.userData.maxSpeed, 1);
+    var camDist = -3.8 - spdFactor * 1.5; // pulls back slightly at high speed
+    var camH = 1.8 + spdFactor * 0.6;
     var camPos = camTarget.clone()
-        .addScaledVector(tan, -8)
-        .add(new THREE.Vector3(0, 4, 0));
+        .addScaledVector(tan, camDist)
+        .add(new THREE.Vector3(0, camH, 0));
 
-    camera.position.lerp(camPos, 0.08);
+    camera.position.lerp(camPos, 0.1);
 
-    var lookAt = camTarget.clone().addScaledVector(tan, 8);
-    lookAt.y = 1;
+    var lookAt = camTarget.clone().addScaledVector(tan, 6);
+    lookAt.y = 0.6;
     camera.lookAt(lookAt);
 }
 
@@ -1506,6 +1801,10 @@ function gameLoop() {
         }
         updateCamera(dt);
     }
+
+    // Always update day/night and clouds
+    updateDayNight(dt);
+    updateClouds(dt);
 
     if (state === 'racing' || state === 'finished') {
         // Update player
