@@ -124,6 +124,7 @@ var skyColors = {
     dawn:  { sky: 0x665577, fog: 0x554466, ambient: 0x887799, dir: 0xffbb66, hemi: 0x776688, ground: 0x443344, exposure: 1.5 }
 };
 var clouds = [];
+var sunMesh, moonMesh, starField;
 
 // Controls
 var input = { left:false, right:false, gas:false, brake:false, nos:false };
@@ -166,7 +167,8 @@ function initThree() {
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-    renderer.shadowMap.enabled = false;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.BasicShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.2;
     document.body.insertBefore(renderer.domElement, document.body.firstChild);
@@ -183,7 +185,14 @@ function initThree() {
 
     dirLight = new THREE.DirectionalLight(0xffeedd, 0.8);
     dirLight.position.set(50, 80, 50);
-    dirLight.castShadow = false;
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.set(512, 512);
+    dirLight.shadow.camera.near = 1;
+    dirLight.shadow.camera.far = 200;
+    dirLight.shadow.camera.left = -60;
+    dirLight.shadow.camera.right = 60;
+    dirLight.shadow.camera.top = 60;
+    dirLight.shadow.camera.bottom = -60;
     scene.add(dirLight);
 
     // Ground plane
@@ -192,7 +201,7 @@ function initThree() {
     var ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -0.15;
-    // ground.receiveShadow = true;
+    ground.receiveShadow = true;
     scene.add(ground);
     // store ref for day/night color changes
     ground.userData.isGround = true;
@@ -204,6 +213,40 @@ function initThree() {
 
     // Clouds
     createClouds();
+
+    // Sun
+    sunMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(8, 12, 12),
+        new THREE.MeshBasicMaterial({ color: 0xffee88 })
+    );
+    scene.add(sunMesh);
+
+    // Moon
+    moonMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(5, 12, 12),
+        new THREE.MeshBasicMaterial({ color: 0xddeeff })
+    );
+    scene.add(moonMesh);
+
+    // Stars (particle field)
+    var starGeo = new THREE.BufferGeometry();
+    var starVerts = [];
+    for (var si = 0; si < 400; si++) {
+        var theta = Math.random() * Math.PI * 2;
+        var phi = Math.random() * Math.PI * 0.5;
+        var sr = 350 + Math.random() * 100;
+        starVerts.push(
+            Math.cos(theta) * Math.sin(phi) * sr,
+            Math.cos(phi) * sr + 30,
+            Math.sin(theta) * Math.sin(phi) * sr
+        );
+    }
+    starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starVerts, 3));
+    var starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 1.2, sizeAttenuation: true });
+    starField = new THREE.Points(starGeo, starMat);
+    starField.visible = false;
+    scene.add(starField);
+
     // Start at dawn
     dayNightTime = 0.75;
 
@@ -296,10 +339,47 @@ function updateDayNight(dt) {
     var exposure = from.exposure + (to.exposure - from.exposure) * t;
     renderer.toneMappingExposure = exposure;
 
-    // Sun position
+    // Sun/Moon position
     var sunAngle = dayNightTime * Math.PI * 2;
-    dirLight.position.set(Math.cos(sunAngle) * 80, Math.sin(sunAngle) * 80 + 20, 50);
+    var sunX = Math.cos(sunAngle) * 200;
+    var sunY = Math.sin(sunAngle) * 200 + 20;
+    var sunZ = 50;
+    dirLight.position.set(sunX * 0.4, sunY * 0.4, sunZ);
     dirLight.intensity = 0.2 + Math.max(0, Math.sin(sunAngle)) * 0.8;
+
+    // Shadow follows player for performance
+    if (playerCar) {
+        dirLight.target.position.copy(playerCar.position);
+        dirLight.target.updateMatrixWorld();
+    }
+    // Only cast shadows during day
+    dirLight.castShadow = (sunY > 10);
+
+    // Sun mesh
+    if (sunMesh) {
+        sunMesh.position.set(sunX, sunY, sunZ);
+        sunMesh.visible = (sunY > -10);
+        var sunBright = Math.max(0, Math.min(1, sunY / 80));
+        sunMesh.material.color.setHex(sunBright > 0.5 ? 0xffee88 : 0xff6622);
+        sunMesh.scale.setScalar(0.8 + sunBright * 0.4);
+    }
+
+    // Moon mesh (opposite side)
+    if (moonMesh) {
+        moonMesh.position.set(-sunX * 0.8, -sunY * 0.8 + 60, -sunZ * 0.5);
+        moonMesh.visible = (moonMesh.position.y > 5);
+    }
+
+    // Stars visible at night
+    if (starField) {
+        var isNight = (dayNightTime > 0.4 && dayNightTime < 0.9);
+        starField.visible = isNight;
+        if (isNight) {
+            var nightDepth = 1 - Math.abs(dayNightTime - 0.625) / 0.225;
+            starField.material.opacity = Math.max(0, nightDepth);
+            starField.material.transparent = true;
+        }
+    }
 
     // Cloud opacity based on time of day (update only every ~10 frames)
     if (!updateDayNight._fc) updateDayNight._fc = 0;
@@ -364,14 +444,14 @@ function createRoadTexture() {
     var c = document.createElement('canvas');
     c.width = 512; c.height = 512;
     var ctx = c.getContext('2d');
-    // Dark asphalt base
-    ctx.fillStyle = '#444450';
+    // Asphalt base - visible grey
+    ctx.fillStyle = '#5a5a65';
     ctx.fillRect(0, 0, 512, 512);
     // Aggregate noise - lots of small dots for realism
     for (var i = 0; i < 8000; i++) {
         var x = Math.random() * 512;
         var y = Math.random() * 512;
-        var v = Math.floor(50 + Math.random() * 50);
+        var v = Math.floor(65 + Math.random() * 55);
         ctx.fillStyle = 'rgb(' + v + ',' + v + ',' + (v + 4) + ')';
         ctx.fillRect(x, y, 1 + Math.random() * 3, 1 + Math.random() * 3);
     }
@@ -443,11 +523,13 @@ function buildRoadMesh() {
     var roadTex = createRoadTexture();
     var roadMat = new THREE.MeshStandardMaterial({
         map: roadTex,
-        roughness: 0.85,
+        color: 0xffffff,
+        roughness: 0.82,
         metalness: 0.02
     });
 
     var mesh = new THREE.Mesh(geo, roadMat);
+    mesh.receiveShadow = true;
 
     // Shoulder strips (white edge lines)
     for (var side = -1; side <= 1; side += 2) {
@@ -792,6 +874,57 @@ function placeBuildings() {
         tlgreen.position.set(tlpos.x, 3.45, tlpos.z + 0.08);
         scene.add(tlgreen);
     }
+
+    // Second row of background skyscrapers (skyline depth)
+    for (var bg = 0; bg < 30; bg++) {
+        var bgt = bg / 30;
+        var bgpt = trackCurve.getPointAt(bgt);
+        var bgtan = trackCurve.getTangentAt(bgt).normalize();
+        var bgright = new THREE.Vector3(-bgtan.z, 0, bgtan.x);
+        var bgside = (bg % 2 === 0) ? 1 : -1;
+        var bgdist = ROAD_WIDTH / 2 + 30 + Math.random() * 40;
+
+        var bgw = 5 + Math.random() * 10;
+        var bgh = 15 + Math.random() * 45;
+        var bgd = 5 + Math.random() * 10;
+
+        var bgColors = [0x0a0a1a, 0x0f0f20, 0x080818, 0x101025];
+        var bgmat = new THREE.MeshStandardMaterial({
+            color: bgColors[Math.floor(Math.random() * bgColors.length)],
+            emissive: 0x111133,
+            emissiveIntensity: 0.15,
+            roughness: 0.85
+        });
+        var bgmesh = new THREE.Mesh(new THREE.BoxGeometry(bgw, bgh, bgd), bgmat);
+        var bgpos = bgpt.clone().addScaledVector(bgright, bgside * bgdist);
+        bgmesh.position.set(bgpos.x, bgh / 2, bgpos.z);
+        scene.add(bgmesh);
+
+        // Scattered lit windows on back row
+        if (bgh > 20) {
+            var wRows = Math.floor(bgh / 3);
+            var wCols = Math.floor(bgw / 2);
+            for (var wr = 0; wr < Math.min(wRows, 8); wr++) {
+                for (var wc = 0; wc < Math.min(wCols, 4); wc++) {
+                    if (Math.random() < 0.6) continue;
+                    var wm = new THREE.Mesh(
+                        new THREE.PlaneGeometry(1, 1.2),
+                        new THREE.MeshBasicMaterial({
+                            color: Math.random() < 0.5 ? 0xffdd88 : 0x88aaff,
+                            transparent: true, opacity: 0.4 + Math.random() * 0.3
+                        })
+                    );
+                    wm.position.set(
+                        bgpos.x, 3 + wr * 3,
+                        bgpos.z + bgside * bgd * 0.51
+                    );
+                    wm.position.x += (wc - wCols / 2) * 2;
+                    wm.rotation.y = (bgside > 0) ? 0 : Math.PI;
+                    scene.add(wm);
+                }
+            }
+        }
+    }
 }
 
 function placeTrackLights() {
@@ -941,7 +1074,7 @@ function buildCar(color, isPlayer, carType) {
 
     var carTex = createCarTexture(color, carType);
     var bodyMat = new THREE.MeshStandardMaterial({
-        map: carTex, metalness: 0.7, roughness: 0.15,
+        map: carTex, color: 0xffffff, metalness: 0.7, roughness: 0.15,
         emissive: color, emissiveIntensity: 0.4
     });
     var darkMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.5, metalness: 0.3 });
@@ -953,11 +1086,13 @@ function buildCar(color, isPlayer, carType) {
     // --- Main body ---
     var lower = new THREE.Mesh(new THREE.BoxGeometry(bWid, bodyH, bLen), bodyMat);
     lower.position.y = 0.13 + bodyH / 2;
+    lower.castShadow = true;
     group.add(lower);
 
     // --- Cabin / greenhouse ---
     var cab = new THREE.Mesh(new THREE.BoxGeometry(bWid * cabW, cabH, bLen * cabLen), bodyMat);
     cab.position.set(0, 0.13 + bodyH + cabH / 2, bLen * cabZ * 0.3);
+    cab.castShadow = true;
     group.add(cab);
 
     // --- Front hood (angled down) ---
@@ -1097,8 +1232,28 @@ function buildCar(color, isPlayer, carType) {
         group.add(mir);
     }
 
-    // --- Wheels ---
-    var tireMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.9 });
+    // --- Wheels with tire tread texture ---
+    // Procedural tire texture
+    var tireCanvas = document.createElement('canvas');
+    tireCanvas.width = 64; tireCanvas.height = 64;
+    var tc = tireCanvas.getContext('2d');
+    tc.fillStyle = '#1a1a1a';
+    tc.fillRect(0, 0, 64, 64);
+    // Tread pattern
+    tc.fillStyle = '#111111';
+    for (var tp = 0; tp < 8; tp++) {
+        tc.fillRect(0, tp * 8, 64, 3);
+    }
+    tc.fillStyle = '#222222';
+    for (var ts = 0; ts < 6; ts++) {
+        tc.fillRect(ts * 11, 0, 4, 64);
+    }
+    var tireTex = new THREE.CanvasTexture(tireCanvas);
+    tireTex.wrapS = THREE.RepeatWrapping;
+    tireTex.wrapT = THREE.RepeatWrapping;
+    tireTex.needsUpdate = true;
+
+    var tireMat = new THREE.MeshStandardMaterial({ map: tireTex, roughness: 0.9, metalness: 0.05 });
     var rimMat = new THREE.MeshStandardMaterial({ color: 0xbbbbbb, metalness: 0.9, roughness: 0.05 });
     var rearWider = (carType === 'porsche' || carType === 'muscle') ? 1.08 : 1.0;
     var wheelPositions = [
@@ -1112,20 +1267,35 @@ function buildCar(color, isPlayer, carType) {
     for (var wi = 0; wi < wheelPositions.length; wi++) {
         var wheelGroup = new THREE.Group();
         var wScale = wheelPositions[wi][3];
-        // Tire
-        var tire = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.12 * wScale, 12), tireMat);
+        // Tire with treads
+        var tire = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.12 * wScale, 14), tireMat);
         tire.rotation.z = Math.PI / 2;
         wheelGroup.add(tire);
-        // Rim
-        var rim = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.13 * wScale, 10), rimMat);
+        // Sidewall (dark ring)
+        for (var swl = -1; swl <= 1; swl += 2) {
+            var sideWall = new THREE.Mesh(
+                new THREE.RingGeometry(0.13, 0.2, 14),
+                new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.95, side: THREE.DoubleSide })
+            );
+            sideWall.rotation.y = Math.PI / 2;
+            sideWall.position.x = swl * 0.061 * wScale;
+            wheelGroup.add(sideWall);
+        }
+        // Rim with spoke design
+        var rim = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.13 * wScale, 12), rimMat);
         rim.rotation.z = Math.PI / 2;
         wheelGroup.add(rim);
-        // Spokes
-        for (var sp = 0; sp < 5; sp++) {
-            var spoke = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.015, 0.015), rimMat);
-            spoke.rotation.z = (sp / 5) * Math.PI;
+        // Multi-spoke design
+        var numSpokes = (carType === 'lambo') ? 7 : (carType === 'muscle') ? 5 : 6;
+        for (var sp = 0; sp < numSpokes; sp++) {
+            var spoke = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.012, 0.012), rimMat);
+            spoke.rotation.z = (sp / numSpokes) * Math.PI;
             wheelGroup.add(spoke);
         }
+        // Center hub
+        var hub = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.14 * wScale, 6), chromeMat);
+        hub.rotation.z = Math.PI / 2;
+        wheelGroup.add(hub);
 
         wheelGroup.position.set(wheelPositions[wi][0], wheelPositions[wi][1], wheelPositions[wi][2]);
         group.add(wheelGroup);
@@ -1485,17 +1655,25 @@ function updateCar(car, dt, isPlayer) {
     lookTarget.y = car.position.y;
     car.lookAt(lookTarget);
 
-    // Car physics: body roll (tilt) when turning + pitch on accel/brake
-    // Use quaternion multiply so we don't corrupt lookAt orientation
+    // Car physics: body roll (lean into turns) + pitch on accel/brake
+    // Stronger roll based on both lane change and track curvature
     var steerDelta = ud.targetLaneOffset - ud.laneOffset;
-    var targetRoll = -steerDelta * 0.04 * Math.min(ud.speed / 20, 1);
+
+    // Track curvature: compare tangent at t vs t+small offset
+    var curveSample = Math.min(t + 0.005, 0.999);
+    var tanAhead = trackCurve.getTangentAt(curveSample).normalize();
+    var trackCurveAmount = tan.x * tanAhead.z - tan.z * tanAhead.x; // cross product y
+
+    var spdRatio = Math.min(ud.speed / 20, 1);
+    var targetRoll = (-steerDelta * 0.06 - trackCurveAmount * 2.5) * spdRatio;
+    targetRoll = Math.max(-0.18, Math.min(0.18, targetRoll));
     if (!ud.bodyRoll) ud.bodyRoll = 0;
-    ud.bodyRoll += (targetRoll - ud.bodyRoll) * 0.1;
+    ud.bodyRoll += (targetRoll - ud.bodyRoll) * 0.12;
 
     var targetPitch = 0;
     if (isPlayer) {
-        if (input.brake && ud.speed > 3) targetPitch = 0.03;
-        else if (input.gas || ud.nosActive) targetPitch = -0.015;
+        if (input.brake && ud.speed > 3) targetPitch = 0.04;
+        else if (input.gas || ud.nosActive) targetPitch = -0.02;
     }
     if (!ud.bodyPitch) ud.bodyPitch = 0;
     ud.bodyPitch += (targetPitch - ud.bodyPitch) * 0.08;
@@ -1508,11 +1686,23 @@ function updateCar(car, dt, isPlayer) {
         car.quaternion.multiply(tiltQ);
     }
 
-    // Wheel spin
+    // Wheel spin — visible rotation on the rolling axis
     if (ud.wheels) {
-        var wheelSpin = ud.speed * dt * 8;
+        // Wheels are oriented with Z = Math.PI/2 so rolling axis is local Y
+        if (!ud.wheelAngle) ud.wheelAngle = 0;
+        ud.wheelAngle += ud.speed * dt * 5;
         for (var w = 0; w < ud.wheels.length; w++) {
-            ud.wheels[w].rotation.x += wheelSpin;
+            // Apply spin via child meshes (tire is first child)
+            var wg = ud.wheels[w];
+            // Spin entire wheel group on Y (visible rotation)
+            wg.children[0].rotation.x = ud.wheelAngle; // tire
+        }
+        // Front wheel steering turn (first 2 wheels)
+        var frontSteer = (steerDelta * 0.02) * spdRatio;
+        frontSteer = Math.max(-0.25, Math.min(0.25, frontSteer));
+        if (ud.wheels.length >= 2) {
+            ud.wheels[0].rotation.y = frontSteer;
+            ud.wheels[1].rotation.y = frontSteer;
         }
     }
 
