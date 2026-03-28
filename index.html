@@ -99,6 +99,7 @@ var NOS_BOOST = 1.6;
 var GRAVITY = -30;
 var CAR_COLORS = [0x39ff14, 0xff4500, 0x00bfff, 0xff1493, 0xffd700, 0xff6600];
 var AI_COLORS = [0xff4500, 0x00bfff, 0xff1493, 0xffd700, 0xff6600];
+var CAR_TYPES = ['lambo', 'porsche', 'ferrari', 'gt', 'muscle', 'lambo'];
 
 // ================================================================
 //  GLOBALS
@@ -114,7 +115,7 @@ var countdownNum = 3;
 
 // Day/night cycle
 var dayNightTime = 0;
-var DAY_CYCLE_SPEED = 0.015; // full cycle ~420s
+var DAY_CYCLE_SPEED = 0.004; // full cycle ~1500s (25 min)
 var ambientLight, dirLight, hemiLight;
 var skyColors = {
     day:   { sky: 0x6699dd, fog: 0x99bbdd, ambient: 0xaabbcc, dir: 0xfff5e0, hemi: 0x99ccff, ground: 0x556655, exposure: 2.0 },
@@ -360,34 +361,53 @@ function generateTrack() {
 }
 
 function createRoadTexture() {
-    // Procedural asphalt texture via canvas
     var c = document.createElement('canvas');
-    c.width = 256; c.height = 256;
+    c.width = 512; c.height = 512;
     var ctx = c.getContext('2d');
-    // Base asphalt grey
-    ctx.fillStyle = '#555560';
-    ctx.fillRect(0, 0, 256, 256);
-    // Noise grain
-    for (var i = 0; i < 3000; i++) {
-        var x = Math.random() * 256;
-        var y = Math.random() * 256;
-        var b = Math.floor(60 + Math.random() * 30);
-        ctx.fillStyle = 'rgb(' + b + ',' + b + ',' + (b + 5) + ')';
-        ctx.fillRect(x, y, 1 + Math.random() * 2, 1 + Math.random() * 2);
+    // Dark asphalt base
+    ctx.fillStyle = '#444450';
+    ctx.fillRect(0, 0, 512, 512);
+    // Aggregate noise - lots of small dots for realism
+    for (var i = 0; i < 8000; i++) {
+        var x = Math.random() * 512;
+        var y = Math.random() * 512;
+        var v = Math.floor(50 + Math.random() * 50);
+        ctx.fillStyle = 'rgb(' + v + ',' + v + ',' + (v + 4) + ')';
+        ctx.fillRect(x, y, 1 + Math.random() * 3, 1 + Math.random() * 3);
     }
-    // Subtle cracks
-    ctx.strokeStyle = 'rgba(30,30,30,0.15)';
-    ctx.lineWidth = 0.5;
-    for (var j = 0; j < 8; j++) {
+    // Tar patches
+    ctx.fillStyle = 'rgba(30,30,35,0.4)';
+    for (var p = 0; p < 5; p++) {
         ctx.beginPath();
-        ctx.moveTo(Math.random() * 256, Math.random() * 256);
-        ctx.lineTo(Math.random() * 256, Math.random() * 256);
+        ctx.arc(Math.random() * 512, Math.random() * 512, 10 + Math.random() * 30, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    // Cracks
+    ctx.strokeStyle = 'rgba(25,25,28,0.3)';
+    ctx.lineWidth = 1;
+    for (var j = 0; j < 12; j++) {
+        ctx.beginPath();
+        var cx = Math.random() * 512, cy = Math.random() * 512;
+        ctx.moveTo(cx, cy);
+        for (var s = 0; s < 4; s++) {
+            cx += (Math.random() - 0.5) * 60;
+            cy += (Math.random() - 0.5) * 60;
+            ctx.lineTo(cx, cy);
+        }
         ctx.stroke();
+    }
+    // Oil stains
+    ctx.fillStyle = 'rgba(20,20,25,0.15)';
+    for (var o = 0; o < 3; o++) {
+        ctx.beginPath();
+        ctx.ellipse(Math.random() * 512, Math.random() * 512, 15 + Math.random() * 20, 8 + Math.random() * 12, Math.random() * Math.PI, 0, Math.PI * 2);
+        ctx.fill();
     }
     var tex = new THREE.CanvasTexture(c);
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(2, 40);
+    tex.repeat.set(4, 80);
+    tex.needsUpdate = true;
     return tex;
 }
 
@@ -610,50 +630,167 @@ function addWindowGrid(bx, by, bz, bw, bh, bd, zone) {
 }
 
 function placeBuildings() {
-    var numBuildings = 40;
+    var numBuildings = 50;
+    var billboardTexts = ['NEON', 'CYBER', 'SPEED', 'TURBO', 'APEX', 'DRIFT', 'NITRO', 'RUSH'];
+
     for (var i = 0; i < numBuildings; i++) {
         var t = i / numBuildings;
         var pt = trackCurve.getPointAt(t);
         var tan = trackCurve.getTangentAt(t).normalize();
         var right = new THREE.Vector3(-tan.z, 0, tan.x);
         var side = (i % 2 === 0) ? 1 : -1;
-        var dist = ROAD_WIDTH / 2 + 6 + Math.random() * 20;
+        var dist = ROAD_WIDTH / 2 + 5 + Math.random() * 18;
 
-        var bw = 3 + Math.random() * 6;
-        var bh = 4 + Math.random() * 20;
-        var bd = 3 + Math.random() * 6;
-
-        var geo = new THREE.BoxGeometry(bw, bh, bd);
         var zone = getTerrainZone(t);
-        var emColor = zone === 'neon' ? 0x8a2be2 : zone === 'city' ? 0x222266 : 0x111122;
+
+        // NYC-style varied building heights
+        var bw, bh, bd;
+        if (zone === 'city' && Math.random() < 0.3) {
+            // Skyscraper
+            bw = 4 + Math.random() * 5;
+            bh = 25 + Math.random() * 35;
+            bd = 4 + Math.random() * 5;
+        } else {
+            bw = 3 + Math.random() * 6;
+            bh = 5 + Math.random() * 18;
+            bd = 3 + Math.random() * 6;
+        }
+
+        var emColor = zone === 'neon' ? 0x8a2be2 : zone === 'city' ? 0x222244 : 0x111122;
+
+        // Building facade texture
+        var facadeColor = zone === 'city' ? 0x1a1a2a : 0x0a0a15;
         var mat = new THREE.MeshStandardMaterial({
-            color: 0x0a0a15,
+            color: facadeColor,
             emissive: emColor,
-            emissiveIntensity: 0.3,
-            roughness: 0.8
+            emissiveIntensity: 0.25,
+            roughness: 0.75
         });
 
-        var mesh = new THREE.Mesh(geo, mat);
+        var mesh = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), mat);
         var pos = pt.clone().addScaledVector(right, side * dist);
         mesh.position.set(pos.x, bh / 2, pos.z);
-        // mesh.castShadow = true;
         scene.add(mesh);
         buildings.push(mesh);
 
-        // Window grids on all faces
+        // Window grids
         if (bh > 5) {
             addWindowGrid(pos.x, bh / 2, pos.z, bw, bh, bd, zone);
         }
 
-        // Rooftop accent light for taller buildings
-        if (bh > 12) {
-            var roofLight = new THREE.Mesh(
-                new THREE.BoxGeometry(bw * 0.3, 0.2, bd * 0.3),
-                new THREE.MeshBasicMaterial({ color: emColor })
-            );
-            roofLight.position.set(pos.x, bh + 0.1, pos.z);
-            scene.add(roofLight);
+        // --- NYC Details ---
+
+        // Rooftop water tower (tall buildings)
+        if (bh > 15 && Math.random() < 0.4) {
+            var towerGeo = new THREE.CylinderGeometry(0.6, 0.6, 1.5, 8);
+            var towerMat = new THREE.MeshStandardMaterial({ color: 0x554433, roughness: 0.9 });
+            var tower = new THREE.Mesh(towerGeo, towerMat);
+            tower.position.set(pos.x + (Math.random() - 0.5) * bw * 0.4, bh + 1.2, pos.z + (Math.random() - 0.5) * bd * 0.4);
+            scene.add(tower);
+            // Tower legs
+            for (var tl = 0; tl < 4; tl++) {
+                var leg = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.6, 4),
+                    new THREE.MeshStandardMaterial({ color: 0x333333 }));
+                var la = (tl / 4) * Math.PI * 2;
+                leg.position.set(tower.position.x + Math.cos(la) * 0.4, bh + 0.3, tower.position.z + Math.sin(la) * 0.4);
+                scene.add(leg);
+            }
         }
+
+        // Rooftop accent / antenna
+        if (bh > 20 && Math.random() < 0.5) {
+            var antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 3, 4),
+                new THREE.MeshStandardMaterial({ color: 0x666666 }));
+            antenna.position.set(pos.x, bh + 1.5, pos.z);
+            scene.add(antenna);
+            // Blinking light on top
+            var blink = new THREE.Mesh(new THREE.SphereGeometry(0.1, 4, 4),
+                new THREE.MeshBasicMaterial({ color: 0xff0000 }));
+            blink.position.set(pos.x, bh + 3, pos.z);
+            scene.add(blink);
+        }
+
+        // Billboard signs (neon zone)
+        if (zone === 'neon' && Math.random() < 0.3 && bh > 8) {
+            var signW = 2.5 + Math.random() * 2;
+            var signH = 1.2 + Math.random();
+            var signCanvas = document.createElement('canvas');
+            signCanvas.width = 128; signCanvas.height = 64;
+            var sc = signCanvas.getContext('2d');
+            var signColors = [0xff00ff, 0x00ffff, 0xff4400, 0x39ff14];
+            var signColor = signColors[Math.floor(Math.random() * signColors.length)];
+            var sr = (signColor >> 16) & 0xff, sg = (signColor >> 8) & 0xff, sb = signColor & 0xff;
+            sc.fillStyle = 'rgba(5,5,15,0.9)';
+            sc.fillRect(0, 0, 128, 64);
+            sc.fillStyle = 'rgb(' + sr + ',' + sg + ',' + sb + ')';
+            sc.font = 'bold 28px sans-serif';
+            sc.textAlign = 'center';
+            sc.fillText(billboardTexts[Math.floor(Math.random() * billboardTexts.length)], 64, 42);
+            var signTex = new THREE.CanvasTexture(signCanvas);
+            signTex.needsUpdate = true;
+            var signMat = new THREE.MeshBasicMaterial({ map: signTex });
+            var signMesh = new THREE.Mesh(new THREE.PlaneGeometry(signW, signH), signMat);
+            signMesh.position.set(pos.x, bh * 0.7, pos.z + side * bd * 0.52);
+            signMesh.rotation.y = (side > 0) ? 0 : Math.PI;
+            scene.add(signMesh);
+        }
+
+        // Fire escape (city zone, side of building)
+        if (zone === 'city' && Math.random() < 0.25 && bh > 8) {
+            var escSide = (Math.random() < 0.5) ? 1 : -1;
+            var numFloors = Math.floor(bh / 3);
+            for (var fe = 0; fe < Math.min(numFloors, 6); fe++) {
+                // Platform
+                var platGeo = new THREE.BoxGeometry(1.2, 0.04, 0.5);
+                var platMat = new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.5 });
+                var plat = new THREE.Mesh(platGeo, platMat);
+                plat.position.set(pos.x + escSide * (bw * 0.5 + 0.3), 2 + fe * 3, pos.z);
+                scene.add(plat);
+                // Railing
+                var rail = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 0.03),
+                    new THREE.MeshStandardMaterial({ color: 0x444444, transparent: true, opacity: 0.6 }));
+                rail.position.set(pos.x + escSide * (bw * 0.5 + 0.55), 2.25 + fe * 3, pos.z);
+                scene.add(rail);
+            }
+        }
+
+        // Awning/canopy at ground level
+        if (Math.random() < 0.3 && bh > 6) {
+            var awningColors = [0xcc2222, 0x2255aa, 0x228833, 0xaa6622];
+            var awning = new THREE.Mesh(
+                new THREE.BoxGeometry(bw * 0.6, 0.06, 1.2),
+                new THREE.MeshStandardMaterial({ color: awningColors[Math.floor(Math.random() * awningColors.length)] })
+            );
+            awning.position.set(pos.x, 2.8, pos.z + side * (bd * 0.5 + 0.5));
+            awning.rotation.x = side * 0.15;
+            scene.add(awning);
+        }
+    }
+
+    // Add some traffic lights along the track
+    for (var tli = 0; tli < 15; tli++) {
+        var tlt = tli / 15;
+        var tlpt = trackCurve.getPointAt(tlt);
+        var tltan = trackCurve.getTangentAt(tlt).normalize();
+        var tlright = new THREE.Vector3(-tltan.z, 0, tltan.x);
+        var tlside = (tli % 2 === 0) ? 1 : -1;
+        var tlpos = tlpt.clone().addScaledVector(tlright, tlside * (ROAD_WIDTH / 2 + 1.2));
+
+        // Traffic light pole
+        var tlpole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 3.5, 4),
+            new THREE.MeshStandardMaterial({ color: 0x333333 }));
+        tlpole.position.set(tlpos.x, 1.75, tlpos.z);
+        scene.add(tlpole);
+        // Traffic light box
+        var tlbox = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.5, 0.15),
+            new THREE.MeshStandardMaterial({ color: 0x222222 }));
+        tlbox.position.set(tlpos.x, 3.6, tlpos.z);
+        scene.add(tlbox);
+        // Green light (always green for racing!)
+        var tlgreen = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 6),
+            new THREE.MeshBasicMaterial({ color: 0x00ff00 }));
+        tlgreen.position.set(tlpos.x, 3.45, tlpos.z + 0.08);
+        scene.add(tlgreen);
     }
 }
 
@@ -728,102 +865,210 @@ function getTerrainZone(t) {
 // ================================================================
 //  HIGH-POLY CAR BUILDER
 // ================================================================
-function buildCar(color, isPlayer) {
-    var group = new THREE.Group();
-    var bLen = 2.6, bWid = 1.1;
+// Create car paint texture with racing livery
+function createCarTexture(color, carType) {
+    var c = document.createElement('canvas');
+    c.width = 128; c.height = 128;
+    var ctx = c.getContext('2d');
+    // Base color
+    var r = (color >> 16) & 0xff, g = (color >> 8) & 0xff, b = color & 0xff;
+    ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+    ctx.fillRect(0, 0, 128, 128);
+    // Metallic sheen gradient
+    var grad = ctx.createLinearGradient(0, 0, 128, 128);
+    grad.addColorStop(0, 'rgba(255,255,255,0.15)');
+    grad.addColorStop(0.5, 'rgba(0,0,0,0.1)');
+    grad.addColorStop(1, 'rgba(255,255,255,0.1)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 128, 128);
+    // Racing stripes based on type
+    if (carType === 'lambo' || carType === 'gt') {
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.fillRect(50, 0, 12, 128);
+        ctx.fillRect(66, 0, 12, 128);
+    } else if (carType === 'porsche') {
+        ctx.fillStyle = 'rgba(255,255,255,0.2)';
+        ctx.fillRect(0, 52, 128, 24);
+    } else if (carType === 'ferrari') {
+        ctx.fillStyle = 'rgba(255,255,255,0.15)';
+        ctx.fillRect(56, 0, 16, 128);
+    } else if (carType === 'muscle') {
+        ctx.fillStyle = 'rgba(0,0,0,0.25)';
+        ctx.fillRect(44, 0, 8, 128);
+        ctx.fillRect(76, 0, 8, 128);
+    }
+    // Number circle
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.beginPath();
+    ctx.arc(32, 64, 14, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.8)';
+    ctx.font = 'bold 18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(String(Math.floor(Math.random() * 99 + 1)), 32, 70);
 
-    // Higher emissive so cars glow at night
+    var tex = new THREE.CanvasTexture(c);
+    tex.needsUpdate = true;
+    return tex;
+}
+
+function buildCar(color, isPlayer, carType) {
+    carType = carType || 'lambo';
+    var group = new THREE.Group();
+
+    // Car dimensions vary by type
+    var bLen, bWid, bodyH, cabH, cabW, cabZ, cabLen, hoodSlope, rearSlope;
+    switch(carType) {
+        case 'lambo': // Aventador style: very low, wide, angular
+            bLen = 2.8; bWid = 1.2; bodyH = 0.22; cabH = 0.24; cabW = 0.7;
+            cabZ = 0.0; cabLen = 0.35; hoodSlope = 0.08; rearSlope = 0.1; break;
+        case 'porsche': // 911 style: round rear, sloped nose
+            bLen = 2.5; bWid = 1.05; bodyH = 0.26; cabH = 0.28; cabW = 0.72;
+            cabZ = -0.15; cabLen = 0.38; hoodSlope = 0.1; rearSlope = 0.15; break;
+        case 'ferrari': // F40 style: mid-engine, long hood
+            bLen = 2.7; bWid = 1.1; bodyH = 0.24; cabH = 0.25; cabW = 0.68;
+            cabZ = 0.1; cabLen = 0.3; hoodSlope = 0.06; rearSlope = 0.08; break;
+        case 'gt': // GT3 style: balanced, big wing
+            bLen = 2.6; bWid = 1.15; bodyH = 0.25; cabH = 0.26; cabW = 0.74;
+            cabZ = -0.05; cabLen = 0.36; hoodSlope = 0.07; rearSlope = 0.12; break;
+        case 'muscle': // Challenger style: high hood, boxy
+            bLen = 2.7; bWid = 1.15; bodyH = 0.3; cabH = 0.32; cabW = 0.8;
+            cabZ = -0.1; cabLen = 0.4; hoodSlope = 0.04; rearSlope = 0.18; break;
+        default:
+            bLen = 2.6; bWid = 1.1; bodyH = 0.25; cabH = 0.26; cabW = 0.72;
+            cabZ = 0; cabLen = 0.35; hoodSlope = 0.07; rearSlope = 0.12;
+    }
+
+    var carTex = createCarTexture(color, carType);
     var bodyMat = new THREE.MeshStandardMaterial({
-        color: color, metalness: 0.6, roughness: 0.2,
-        emissive: color, emissiveIntensity: 0.35
+        map: carTex, metalness: 0.7, roughness: 0.15,
+        emissive: color, emissiveIntensity: 0.4
     });
     var darkMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.5, metalness: 0.3 });
     var chromeMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.9, roughness: 0.05 });
     var glassMat = new THREE.MeshStandardMaterial({
-        color: 0x224466, metalness: 0.8, roughness: 0.1, transparent: true, opacity: 0.6
+        color: 0x224466, metalness: 0.8, roughness: 0.1, transparent: true, opacity: 0.55
     });
 
-    // --- Lower body (simple box, no ExtrudeGeometry) ---
-    var lowerGeo = new THREE.BoxGeometry(bWid, 0.3, bLen);
-    var lower = new THREE.Mesh(lowerGeo, bodyMat);
-    lower.position.y = 0.28;
+    // --- Main body ---
+    var lower = new THREE.Mesh(new THREE.BoxGeometry(bWid, bodyH, bLen), bodyMat);
+    lower.position.y = 0.13 + bodyH / 2;
     group.add(lower);
 
-    // --- Upper cabin ---
-    var cabGeo = new THREE.BoxGeometry(bWid * 0.8, 0.3, bLen * 0.4);
-    var cabin = new THREE.Mesh(cabGeo, bodyMat);
-    cabin.position.set(0, 0.58, -bLen * 0.05);
-    group.add(cabin);
+    // --- Cabin / greenhouse ---
+    var cab = new THREE.Mesh(new THREE.BoxGeometry(bWid * cabW, cabH, bLen * cabLen), bodyMat);
+    cab.position.set(0, 0.13 + bodyH + cabH / 2, bLen * cabZ * 0.3);
+    group.add(cab);
 
-    // --- Front hood ---
-    var hoodGeo = new THREE.BoxGeometry(bWid * 0.9, 0.08, bLen * 0.3);
+    // --- Front hood (angled down) ---
+    var hoodGeo = new THREE.BoxGeometry(bWid * 0.92, 0.06, bLen * 0.28);
     var hood = new THREE.Mesh(hoodGeo, bodyMat);
-    hood.position.set(0, 0.47, bLen * 0.28);
+    hood.position.set(0, 0.13 + bodyH - hoodSlope, bLen * 0.3);
+    hood.rotation.x = hoodSlope * 2;
     group.add(hood);
 
+    // --- Rear deck ---
+    var rearGeo = new THREE.BoxGeometry(bWid * 0.88, 0.05, bLen * 0.2);
+    var rear = new THREE.Mesh(rearGeo, bodyMat);
+    rear.position.set(0, 0.13 + bodyH - rearSlope * 0.5, -bLen * 0.35);
+    rear.rotation.x = -rearSlope;
+    group.add(rear);
+
     // --- Front splitter ---
-    var splitGeo = new THREE.BoxGeometry(bWid * 1.02, 0.04, 0.12);
-    var splitter = new THREE.Mesh(splitGeo, darkMat);
-    splitter.position.set(0, 0.14, bLen * 0.5);
+    var splitter = new THREE.Mesh(new THREE.BoxGeometry(bWid * 1.04, 0.04, 0.14), darkMat);
+    splitter.position.set(0, 0.12, bLen * 0.5);
     group.add(splitter);
 
     // --- Rear diffuser ---
-    var diffGeo = new THREE.BoxGeometry(bWid * 0.9, 0.06, 0.15);
-    var diffuser = new THREE.Mesh(diffGeo, darkMat);
-    diffuser.position.set(0, 0.15, -bLen * 0.48);
+    var diffuser = new THREE.Mesh(new THREE.BoxGeometry(bWid * 0.92, 0.06, 0.16), darkMat);
+    diffuser.position.set(0, 0.12, -bLen * 0.48);
     group.add(diffuser);
+
+    // --- Side air intakes (lambo/ferrari specific) ---
+    if (carType === 'lambo' || carType === 'ferrari') {
+        for (var ai = -1; ai <= 1; ai += 2) {
+            var intake = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.12, bLen * 0.2), darkMat);
+            intake.position.set(ai * bWid * 0.51, 0.22, -bLen * 0.1);
+            group.add(intake);
+        }
+    }
 
     // --- Side skirts ---
     for (var sk = -1; sk <= 1; sk += 2) {
-        var skirtGeo = new THREE.BoxGeometry(0.06, 0.12, bLen * 0.8);
-        var skirt = new THREE.Mesh(skirtGeo, darkMat);
-        skirt.position.set(sk * bWid * 0.52, 0.17, 0);
+        var skirt = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.1, bLen * 0.8), darkMat);
+        skirt.position.set(sk * bWid * 0.52, 0.15, 0);
         group.add(skirt);
     }
 
-    // --- Windshield (angled) ---
-    var wsGeo = new THREE.BoxGeometry(bWid * 0.75, 0.28, 0.04);
-    var ws = new THREE.Mesh(wsGeo, glassMat);
-    ws.position.set(0, 0.63, bLen * 0.12);
-    ws.rotation.x = 0.4;
+    // --- Fender flares (wider rear for porsche) ---
+    if (carType === 'porsche') {
+        for (var ff = -1; ff <= 1; ff += 2) {
+            var flare = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.15, bLen * 0.25), bodyMat);
+            flare.position.set(ff * (bWid * 0.54), 0.2, -bLen * 0.28);
+            group.add(flare);
+        }
+    }
+
+    // --- Windshield ---
+    var wsW = bWid * cabW * 0.95;
+    var ws = new THREE.Mesh(new THREE.BoxGeometry(wsW, cabH * 0.85, 0.04), glassMat);
+    ws.position.set(0, 0.13 + bodyH + cabH * 0.4, bLen * (cabZ * 0.3 + cabLen * 0.5));
+    ws.rotation.x = 0.45;
     group.add(ws);
 
     // --- Rear window ---
-    var rwGeo = new THREE.BoxGeometry(bWid * 0.65, 0.2, 0.04);
-    var rw = new THREE.Mesh(rwGeo, glassMat);
-    rw.position.set(0, 0.6, -bLen * 0.2);
-    rw.rotation.x = -0.3;
+    var rw = new THREE.Mesh(new THREE.BoxGeometry(wsW * 0.85, cabH * 0.7, 0.04), glassMat);
+    rw.position.set(0, 0.13 + bodyH + cabH * 0.35, bLen * (cabZ * 0.3 - cabLen * 0.5));
+    rw.rotation.x = -0.35;
     group.add(rw);
 
-    // --- Spoiler ---
-    var spoilerGeo = new THREE.BoxGeometry(bWid * 1.0, 0.04, 0.15);
-    var spoiler = new THREE.Mesh(spoilerGeo, darkMat);
-    spoiler.position.set(0, 0.8, -bLen * 0.42);
-    group.add(spoiler);
-    // Spoiler supports
-    for (var ss = -1; ss <= 1; ss += 2) {
-        var supGeo = new THREE.BoxGeometry(0.04, 0.18, 0.04);
-        var sup = new THREE.Mesh(supGeo, chromeMat);
-        sup.position.set(ss * bWid * 0.35, 0.7, -bLen * 0.42);
-        group.add(sup);
+    // --- Side windows ---
+    for (var sw = -1; sw <= 1; sw += 2) {
+        var swM = new THREE.Mesh(new THREE.BoxGeometry(0.04, cabH * 0.65, bLen * cabLen * 0.7), glassMat);
+        swM.position.set(sw * bWid * cabW * 0.5, 0.13 + bodyH + cabH * 0.4, bLen * cabZ * 0.3);
+        group.add(swM);
+    }
+
+    // --- Spoiler (bigger for GT and lambo) ---
+    var spoilerScale = (carType === 'gt' || carType === 'lambo') ? 1.2 : (carType === 'muscle' ? 0.6 : 0.9);
+    if (spoilerScale > 0.3) {
+        var spoiler = new THREE.Mesh(new THREE.BoxGeometry(bWid * spoilerScale, 0.04, 0.14), darkMat);
+        var spoilerY = (carType === 'gt') ? 0.75 : 0.65;
+        spoiler.position.set(0, spoilerY, -bLen * 0.44);
+        group.add(spoiler);
+        // Supports
+        for (var ss = -1; ss <= 1; ss += 2) {
+            var sup = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.16, 0.04), chromeMat);
+            sup.position.set(ss * bWid * 0.35, spoilerY - 0.1, -bLen * 0.44);
+            group.add(sup);
+        }
+    }
+
+    // --- Hood scoop (muscle car) ---
+    if (carType === 'muscle') {
+        var scoop = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.12, 0.35), darkMat);
+        scoop.position.set(0, 0.13 + bodyH + 0.06, bLen * 0.25);
+        group.add(scoop);
     }
 
     // --- Headlights ---
     for (var hl = -1; hl <= 1; hl += 2) {
-        var hlGeo = new THREE.BoxGeometry(0.2, 0.08, 0.06);
-        var hlMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-        var hlMesh = new THREE.Mesh(hlGeo, hlMat);
-        hlMesh.position.set(hl * bWid * 0.35, 0.35, bLen * 0.51);
+        // Light housing
+        var hlW = (carType === 'lambo') ? 0.25 : 0.18;
+        var hlH = (carType === 'porsche') ? 0.08 : 0.06;
+        var hlMesh = new THREE.Mesh(new THREE.BoxGeometry(hlW, hlH, 0.06),
+            new THREE.MeshBasicMaterial({ color: 0xffffff }));
+        hlMesh.position.set(hl * bWid * 0.36, 0.13 + bodyH * 0.7, bLen * 0.51);
         group.add(hlMesh);
-        // DRL
-        var drlGeo = new THREE.BoxGeometry(0.16, 0.02, 0.02);
-        var drl = new THREE.Mesh(drlGeo, new THREE.MeshBasicMaterial({ color: 0xccddff }));
-        drl.position.set(hl * bWid * 0.35, 0.3, bLen * 0.51);
+        // DRL strip
+        var drl = new THREE.Mesh(new THREE.BoxGeometry(hlW * 0.8, 0.02, 0.02),
+            new THREE.MeshBasicMaterial({ color: 0xccddff }));
+        drl.position.set(hl * bWid * 0.36, 0.13 + bodyH * 0.5, bLen * 0.51);
         group.add(drl);
 
         if (isPlayer) {
             var hlLight = new THREE.SpotLight(0xffffff, 2, 30, 0.35, 0.5);
-            hlLight.position.set(hl * bWid * 0.35, 0.35, bLen * 0.5);
+            hlLight.position.set(hl * bWid * 0.36, 0.13 + bodyH * 0.7, bLen * 0.5);
             hlLight.target.position.set(hl * bWid * 0.1, 0, bLen * 0.5 + 10);
             group.add(hlLight);
             group.add(hlLight.target);
@@ -833,51 +1078,54 @@ function buildCar(color, isPlayer) {
     // --- Tail lights ---
     group.userData.tailLights = [];
     for (var tl = -1; tl <= 1; tl += 2) {
-        var tlGeo = new THREE.BoxGeometry(0.18, 0.06, 0.04);
-        var tlMat = new THREE.MeshBasicMaterial({ color: 0xff0022 });
-        var tlMesh = new THREE.Mesh(tlGeo, tlMat);
-        tlMesh.position.set(tl * bWid * 0.35, 0.35, -bLen * 0.51);
+        var tlMesh = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.05, 0.04),
+            new THREE.MeshBasicMaterial({ color: 0xff0022 }));
+        tlMesh.position.set(tl * bWid * 0.35, 0.13 + bodyH * 0.6, -bLen * 0.51);
         group.add(tlMesh);
         group.userData.tailLights.push(tlMesh);
     }
     // Center tail strip
-    var ctlGeo = new THREE.BoxGeometry(bWid * 0.3, 0.03, 0.03);
-    var ctl = new THREE.Mesh(ctlGeo, new THREE.MeshBasicMaterial({ color: 0xff0022 }));
-    ctl.position.set(0, 0.35, -bLen * 0.51);
+    var ctl = new THREE.Mesh(new THREE.BoxGeometry(bWid * 0.35, 0.03, 0.03),
+        new THREE.MeshBasicMaterial({ color: 0xff0022 }));
+    ctl.position.set(0, 0.13 + bodyH * 0.6, -bLen * 0.51);
     group.add(ctl);
 
     // --- Side mirrors ---
     for (var sm = -1; sm <= 1; sm += 2) {
-        var mirGeo = new THREE.BoxGeometry(0.1, 0.06, 0.06);
-        var mir = new THREE.Mesh(mirGeo, chromeMat);
-        mir.position.set(sm * (bWid * 0.56), 0.5, bLen * 0.08);
+        var mir = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.05, 0.06), chromeMat);
+        mir.position.set(sm * (bWid * 0.55), 0.13 + bodyH + 0.08, bLen * 0.1);
         group.add(mir);
     }
 
-    // --- Wheels (simplified, no torus) ---
-    var tireMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.85 });
-    var rimMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.9, roughness: 0.05 });
-
+    // --- Wheels ---
+    var tireMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.9 });
+    var rimMat = new THREE.MeshStandardMaterial({ color: 0xbbbbbb, metalness: 0.9, roughness: 0.05 });
+    var rearWider = (carType === 'porsche' || carType === 'muscle') ? 1.08 : 1.0;
     var wheelPositions = [
-        [-bWid * 0.52, 0.15, bLen * 0.34],
-        [bWid * 0.52, 0.15, bLen * 0.34],
-        [-bWid * 0.52, 0.15, -bLen * 0.34],
-        [bWid * 0.52, 0.15, -bLen * 0.34]
+        [-bWid * 0.52, 0.16, bLen * 0.34, 1.0],
+        [bWid * 0.52, 0.16, bLen * 0.34, 1.0],
+        [-bWid * 0.52, 0.16, -bLen * 0.34, rearWider],
+        [bWid * 0.52, 0.16, -bLen * 0.34, rearWider]
     ];
 
     group.userData.wheels = [];
     for (var wi = 0; wi < wheelPositions.length; wi++) {
         var wheelGroup = new THREE.Group();
-        // Tire (cylinder instead of torus)
-        var tireGeo = new THREE.CylinderGeometry(0.2, 0.2, 0.12, 10);
-        var tire = new THREE.Mesh(tireGeo, tireMat);
+        var wScale = wheelPositions[wi][3];
+        // Tire
+        var tire = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.12 * wScale, 12), tireMat);
         tire.rotation.z = Math.PI / 2;
         wheelGroup.add(tire);
         // Rim
-        var rimGeo = new THREE.CylinderGeometry(0.13, 0.13, 0.13, 8);
-        var rim = new THREE.Mesh(rimGeo, rimMat);
+        var rim = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.13 * wScale, 10), rimMat);
         rim.rotation.z = Math.PI / 2;
         wheelGroup.add(rim);
+        // Spokes
+        for (var sp = 0; sp < 5; sp++) {
+            var spoke = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.015, 0.015), rimMat);
+            spoke.rotation.z = (sp / 5) * Math.PI;
+            wheelGroup.add(spoke);
+        }
 
         wheelGroup.position.set(wheelPositions[wi][0], wheelPositions[wi][1], wheelPositions[wi][2]);
         group.add(wheelGroup);
@@ -885,33 +1133,38 @@ function buildCar(color, isPlayer) {
     }
 
     // --- Exhaust tips ---
-    for (var ex = -1; ex <= 1; ex += 2) {
-        var exGeo = new THREE.CylinderGeometry(0.03, 0.04, 0.12, 6);
-        var exMesh = new THREE.Mesh(exGeo, chromeMat);
-        exMesh.rotation.x = Math.PI / 2;
-        exMesh.position.set(ex * 0.2, 0.16, -bLen * 0.54);
-        group.add(exMesh);
+    var numExhausts = (carType === 'lambo' || carType === 'muscle') ? 2 : 1;
+    for (var ex = -numExhausts; ex <= numExhausts; ex += 2) {
+        if (ex === 0 && numExhausts > 1) continue;
+        var exM = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.045, 0.14, 6), chromeMat);
+        exM.rotation.x = Math.PI / 2;
+        exM.position.set(ex * 0.15, 0.14, -bLen * 0.54);
+        group.add(exM);
     }
 
     // --- Underbody neon glow ---
-    var underGeo = new THREE.PlaneGeometry(bWid * 0.85, bLen * 0.85);
-    var underMat = new THREE.MeshBasicMaterial({
-        color: color, transparent: true, opacity: 0.3, side: THREE.DoubleSide
-    });
-    var under = new THREE.Mesh(underGeo, underMat);
+    var under = new THREE.Mesh(
+        new THREE.PlaneGeometry(bWid * 0.85, bLen * 0.85),
+        new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.35, side: THREE.DoubleSide })
+    );
     under.rotation.x = -Math.PI / 2;
     under.position.y = 0.03;
     group.add(under);
 
-    // --- Neon trim lines (bright at night) ---
+    // --- Neon trim lines ---
     var trimMat = new THREE.MeshBasicMaterial({ color: color });
-    var trimGeo = new THREE.BoxGeometry(bWid * 1.01, 0.02, 0.02);
-    var trimF = new THREE.Mesh(trimGeo, trimMat);
-    trimF.position.set(0, 0.14, bLen * 0.3);
+    var trimF = new THREE.Mesh(new THREE.BoxGeometry(bWid * 1.01, 0.02, 0.02), trimMat);
+    trimF.position.set(0, 0.12, bLen * 0.3);
     group.add(trimF);
     var trimR = trimF.clone();
     trimR.position.z = -bLen * 0.3;
     group.add(trimR);
+    // Side neon strips
+    for (var ns = -1; ns <= 1; ns += 2) {
+        var sideNeon = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.02, bLen * 0.7), trimMat);
+        sideNeon.position.set(ns * bWid * 0.5, 0.12, 0);
+        group.add(sideNeon);
+    }
 
     // Car data
     group.userData.trackT = 0;
@@ -943,16 +1196,17 @@ function buildCar(color, isPlayer) {
 //  SPAWN CARS
 // ================================================================
 function spawnCars() {
-    // Player
-    playerCar = buildCar(CAR_COLORS[0], true);
+    // Player always gets a Lamborghini
+    playerCar = buildCar(CAR_COLORS[0], true, 'lambo');
     playerCar.userData.trackT = 0.0;
     playerCar.userData.laneOffset = 0;
     playerCar.userData.currentLane = 1;
 
-    // AI
+    // AI get different car types
     aiCars = [];
+    var aiTypes = ['porsche', 'ferrari', 'gt', 'muscle', 'lambo'];
     for (var i = 0; i < NUM_AI; i++) {
-        var car = buildCar(AI_COLORS[i % AI_COLORS.length], false);
+        var car = buildCar(AI_COLORS[i % AI_COLORS.length], false, aiTypes[i % aiTypes.length]);
         car.userData.trackT = 0.0;
         car.userData.laneOffset = ((i % NUM_LANES) - 1.5) * LANE_W;
         car.userData.currentLane = i % NUM_LANES;
@@ -1307,6 +1561,15 @@ function updateCar(car, dt, isPlayer) {
     if (ud.speed > 2 && Math.random() < 0.3) {
         emitExhaust(car);
     }
+
+    // Tire physics: smoke on hard turns
+    if (ud.speed > 8 && Math.abs(steerDelta) > 0.5) {
+        if (Math.random() < 0.4) emitTireSmoke(car);
+    }
+    // Tire screech on very hard turns at speed
+    if (isPlayer && ud.speed > 15 && Math.abs(steerDelta) > 1.0) {
+        if (Math.random() < 0.05) playSound(300 + Math.random() * 200, 0.1, 'sawtooth', 0.03);
+    }
 }
 
 function updatePlayerCar(dt) {
@@ -1411,6 +1674,12 @@ function updateAI(car, dt) {
 
     // Exhaust
     if (ud.speed > 3 && Math.random() < 0.2) emitExhaust(car);
+
+    // AI tire smoke on lane changes
+    var aiSteerDelta = ud.targetLaneOffset - ud.laneOffset;
+    if (ud.speed > 12 && Math.abs(aiSteerDelta) > 0.8 && Math.random() < 0.3) {
+        emitTireSmoke(car);
+    }
 
     updateCar(car, dt, false);
 }
