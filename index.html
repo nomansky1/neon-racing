@@ -359,10 +359,42 @@ function generateTrack() {
     placeTrackLights();
 }
 
+function createRoadTexture() {
+    // Procedural asphalt texture via canvas
+    var c = document.createElement('canvas');
+    c.width = 256; c.height = 256;
+    var ctx = c.getContext('2d');
+    // Base asphalt grey
+    ctx.fillStyle = '#555560';
+    ctx.fillRect(0, 0, 256, 256);
+    // Noise grain
+    for (var i = 0; i < 3000; i++) {
+        var x = Math.random() * 256;
+        var y = Math.random() * 256;
+        var b = Math.floor(60 + Math.random() * 30);
+        ctx.fillStyle = 'rgb(' + b + ',' + b + ',' + (b + 5) + ')';
+        ctx.fillRect(x, y, 1 + Math.random() * 2, 1 + Math.random() * 2);
+    }
+    // Subtle cracks
+    ctx.strokeStyle = 'rgba(30,30,30,0.15)';
+    ctx.lineWidth = 0.5;
+    for (var j = 0; j < 8; j++) {
+        ctx.beginPath();
+        ctx.moveTo(Math.random() * 256, Math.random() * 256);
+        ctx.lineTo(Math.random() * 256, Math.random() * 256);
+        ctx.stroke();
+    }
+    var tex = new THREE.CanvasTexture(c);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(2, 40);
+    return tex;
+}
+
 function buildRoadMesh() {
     var divisions = 300;
     var geo = new THREE.BufferGeometry();
-    var verts = [], uvs = [], indices = [], colors = [];
+    var verts = [], uvs = [], indices = [];
     var halfW = ROAD_WIDTH / 2;
 
     for (var i = 0; i <= divisions; i++) {
@@ -374,13 +406,8 @@ function buildRoadMesh() {
         var l = pt.clone().addScaledVector(right, -halfW);
         var r = pt.clone().addScaledVector(right, halfW);
 
-        // Raise road slightly above ground to avoid z-fighting
         verts.push(l.x, 0.05, l.z, r.x, 0.05, r.z);
-        uvs.push(0, t * 80, 1, t * 80);
-
-        // Subtle color variation for realism
-        var shade = 0.38 + Math.sin(t * 50) * 0.02;
-        colors.push(shade, shade, shade + 0.02, shade, shade, shade + 0.02);
+        uvs.push(0, t * 60, 1, t * 60);
 
         if (i < divisions) {
             var a = i * 2, b = i * 2 + 1, c = (i + 1) * 2, d = (i + 1) * 2 + 1;
@@ -390,34 +417,31 @@ function buildRoadMesh() {
 
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     geo.setIndex(indices);
     geo.computeVertexNormals();
 
-    // Realistic bright asphalt
+    var roadTex = createRoadTexture();
     var roadMat = new THREE.MeshStandardMaterial({
-        color: 0x666672,
+        map: roadTex,
         roughness: 0.85,
-        metalness: 0.02,
-        vertexColors: true
+        metalness: 0.02
     });
 
     var mesh = new THREE.Mesh(geo, roadMat);
-    // mesh.receiveShadow = true;
 
-    // Add shoulder strips (lighter edges)
+    // Shoulder strips (white edge lines)
     for (var side = -1; side <= 1; side += 2) {
         var shoulderGeo = new THREE.BufferGeometry();
         var sv = [], si = [];
-        var sw = 0.6;
+        var sw = 0.25;
         for (var j = 0; j <= divisions; j++) {
             var st = j / divisions;
             var spt = trackCurve.getPointAt(st);
             var stan = trackCurve.getTangentAt(st).normalize();
             var sright = new THREE.Vector3(-stan.z, 0, stan.x);
-            var inner = spt.clone().addScaledVector(sright, side * halfW);
-            var outer = spt.clone().addScaledVector(sright, side * (halfW + sw));
-            sv.push(inner.x, 0.04, inner.z, outer.x, 0.04, outer.z);
+            var inner = spt.clone().addScaledVector(sright, side * (halfW - 0.1));
+            var outer = spt.clone().addScaledVector(sright, side * (halfW - 0.1 + sw));
+            sv.push(inner.x, 0.06, inner.z, outer.x, 0.06, outer.z);
             if (j < divisions) {
                 var sa = j * 2, sb = j * 2 + 1, sc = (j+1) * 2, sd = (j+1) * 2 + 1;
                 si.push(sa, sc, sb, sb, sc, sd);
@@ -426,9 +450,8 @@ function buildRoadMesh() {
         shoulderGeo.setAttribute('position', new THREE.Float32BufferAttribute(sv, 3));
         shoulderGeo.setIndex(si);
         shoulderGeo.computeVertexNormals();
-        var shoulderMat = new THREE.MeshStandardMaterial({ color: 0x888890, roughness: 0.9 });
+        var shoulderMat = new THREE.MeshBasicMaterial({ color: 0xdddddd });
         var shoulderMesh = new THREE.Mesh(shoulderGeo, shoulderMat);
-        shoulderMesh.receiveShadow = true;
         mesh.add(shoulderMesh);
     }
 
@@ -513,7 +536,7 @@ function buildLaneMarkings() {
     markGeo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     markGeo.setIndex(indices);
 
-    var markMat = new THREE.MeshBasicMaterial({ color: 0x4444ff });
+    var markMat = new THREE.MeshBasicMaterial({ color: 0xffcc22 });
     scene.add(new THREE.Mesh(markGeo, markMat));
 
     // Start/finish line
@@ -635,38 +658,63 @@ function placeBuildings() {
 }
 
 function placeTrackLights() {
-    var numLights = 20;
+    // Street lights along the road
+    var numLights = 30;
     for (var i = 0; i < numLights; i++) {
         var t = i / numLights;
         var pt = trackCurve.getPointAt(t);
         var tan = trackCurve.getTangentAt(t).normalize();
         var right = new THREE.Vector3(-tan.z, 0, tan.x);
         var side = (i % 2 === 0) ? 1 : -1;
-        var dist = ROAD_WIDTH / 2 + 1.5;
+        var dist = ROAD_WIDTH / 2 + 2.0;
 
-        // Pole
-        var poleGeo = new THREE.CylinderGeometry(0.08, 0.08, 4, 6);
-        var poleMat = new THREE.MeshStandardMaterial({ color: 0x333344 });
-        var pole = new THREE.Mesh(poleGeo, poleMat);
         var pos = pt.clone().addScaledVector(right, side * dist);
-        pole.position.set(pos.x, 2, pos.z);
+
+        // Street light pole
+        var poleMat = new THREE.MeshStandardMaterial({ color: 0x444455, metalness: 0.5, roughness: 0.4 });
+        var poleGeo = new THREE.CylinderGeometry(0.06, 0.1, 5, 6);
+        var pole = new THREE.Mesh(poleGeo, poleMat);
+        pole.position.set(pos.x, 2.5, pos.z);
         scene.add(pole);
 
-        // Light sphere
-        var zone = getTerrainZone(t);
-        var lColor = zone === 'neon' ? 0xff00ff : zone === 'city' ? 0x4444ff : 0x8a2be2;
-        var sphereGeo = new THREE.SphereGeometry(0.2, 8, 8);
-        var sphereMat = new THREE.MeshBasicMaterial({ color: lColor });
-        var sphere = new THREE.Mesh(sphereGeo, sphereMat);
-        sphere.position.set(pos.x, 4.1, pos.z);
-        scene.add(sphere);
+        // Curved arm extending over road
+        var armGeo = new THREE.BoxGeometry(0.06, 0.06, 2.5);
+        var arm = new THREE.Mesh(armGeo, poleMat);
+        arm.position.set(pos.x - side * 1.0, 4.9, pos.z);
+        arm.rotation.z = side * 0.15;
+        scene.add(arm);
 
-        // Point light (sparse to save performance)
-        if (i % 4 === 0) {
-            var pLight = new THREE.PointLight(lColor, 2, 15);
-            pLight.position.set(pos.x, 4, pos.z);
+        // Light fixture (warm white downlight)
+        var fixGeo = new THREE.BoxGeometry(0.4, 0.1, 0.6);
+        var fixMat = new THREE.MeshBasicMaterial({ color: 0xffeecc });
+        var fixture = new THREE.Mesh(fixGeo, fixMat);
+        fixture.position.set(pos.x - side * 2.0, 4.8, pos.z);
+        scene.add(fixture);
+
+        // Downward glow cone (visible light cone)
+        var coneGeo = new THREE.ConeGeometry(1.5, 4, 6, 1, true);
+        var coneMat = new THREE.MeshBasicMaterial({
+            color: 0xffeeaa, transparent: true, opacity: 0.04, side: THREE.DoubleSide
+        });
+        var cone = new THREE.Mesh(coneGeo, coneMat);
+        cone.position.set(pos.x - side * 2.0, 2.8, pos.z);
+        scene.add(cone);
+
+        // Point light — every other light for perf
+        if (i % 2 === 0) {
+            var pLight = new THREE.PointLight(0xffeedd, 1.5, 20, 2);
+            pLight.position.set(pos.x - side * 2.0, 4.7, pos.z);
             scene.add(pLight);
         }
+
+        // Colored accent at base (neon theme)
+        var zone = getTerrainZone(t);
+        var accentColor = zone === 'neon' ? 0xff00ff : zone === 'city' ? 0x4488ff : 0x8a2be2;
+        var accentGeo = new THREE.BoxGeometry(0.15, 0.5, 0.15);
+        var accentMat = new THREE.MeshBasicMaterial({ color: accentColor });
+        var accent = new THREE.Mesh(accentGeo, accentMat);
+        accent.position.set(pos.x, 0.25, pos.z);
+        scene.add(accent);
     }
 }
 
@@ -684,287 +732,186 @@ function buildCar(color, isPlayer) {
     var group = new THREE.Group();
     var bLen = 2.6, bWid = 1.1;
 
+    // Higher emissive so cars glow at night
     var bodyMat = new THREE.MeshStandardMaterial({
-        color: color, metalness: 0.75, roughness: 0.15,
-        emissive: color, emissiveIntensity: 0.12
+        color: color, metalness: 0.6, roughness: 0.2,
+        emissive: color, emissiveIntensity: 0.35
     });
     var darkMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.5, metalness: 0.3 });
-    var chromeMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.95, roughness: 0.05 });
+    var chromeMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.9, roughness: 0.05 });
     var glassMat = new THREE.MeshStandardMaterial({
-        color: 0x112244, metalness: 0.9, roughness: 0.05, transparent: true, opacity: 0.65
+        color: 0x224466, metalness: 0.8, roughness: 0.1, transparent: true, opacity: 0.6
     });
 
-    // --- Lower body (rounded) ---
-    var lowerShape = new THREE.Shape();
-    var hw = bWid / 2, hl = bLen / 2;
-    lowerShape.moveTo(-hw + 0.15, -hl);
-    lowerShape.lineTo(hw - 0.15, -hl);
-    lowerShape.quadraticCurveTo(hw, -hl, hw, -hl + 0.15);
-    lowerShape.lineTo(hw, hl - 0.2);
-    lowerShape.quadraticCurveTo(hw, hl, hw - 0.2, hl);
-    lowerShape.lineTo(-hw + 0.2, hl);
-    lowerShape.quadraticCurveTo(-hw, hl, -hw, hl - 0.2);
-    lowerShape.lineTo(-hw, -hl + 0.15);
-    lowerShape.quadraticCurveTo(-hw, -hl, -hw + 0.15, -hl);
-
-    var extrudeSettings = { depth: 0.35, bevelEnabled: true, bevelThickness: 0.03, bevelSize: 0.03, bevelSegments: 3 };
-    var lowerGeo = new THREE.ExtrudeGeometry(lowerShape, extrudeSettings);
-    lowerGeo.rotateX(-Math.PI / 2);
+    // --- Lower body (simple box, no ExtrudeGeometry) ---
+    var lowerGeo = new THREE.BoxGeometry(bWid, 0.3, bLen);
     var lower = new THREE.Mesh(lowerGeo, bodyMat);
-    lower.position.y = 0.18;
-    // lower.castShadow = true;
+    lower.position.y = 0.28;
     group.add(lower);
 
-    // --- Upper body / cabin (tapered) ---
-    var cabShape = new THREE.Shape();
-    var cw = bWid * 0.42, cl = bLen * 0.22;
-    cabShape.moveTo(-cw, -cl);
-    cabShape.lineTo(cw, -cl);
-    cabShape.lineTo(cw * 0.85, cl);
-    cabShape.lineTo(-cw * 0.85, cl);
-    cabShape.closePath();
-    var cabExtrude = { depth: 0.32, bevelEnabled: true, bevelThickness: 0.02, bevelSize: 0.04, bevelSegments: 3 };
-    var cabGeo = new THREE.ExtrudeGeometry(cabShape, cabExtrude);
-    cabGeo.rotateX(-Math.PI / 2);
+    // --- Upper cabin ---
+    var cabGeo = new THREE.BoxGeometry(bWid * 0.8, 0.3, bLen * 0.4);
     var cabin = new THREE.Mesh(cabGeo, bodyMat);
-    cabin.position.set(0, 0.53, -bLen * 0.04);
-    // cabin.castShadow = true;
+    cabin.position.set(0, 0.58, -bLen * 0.05);
     group.add(cabin);
 
-    // --- Front hood (curved) ---
-    var hoodGeo = new THREE.BoxGeometry(bWid * 0.9, 0.06, bLen * 0.28);
+    // --- Front hood ---
+    var hoodGeo = new THREE.BoxGeometry(bWid * 0.9, 0.08, bLen * 0.3);
     var hood = new THREE.Mesh(hoodGeo, bodyMat);
-    hood.position.set(0, 0.52, bLen * 0.28);
+    hood.position.set(0, 0.47, bLen * 0.28);
     group.add(hood);
 
     // --- Front splitter ---
-    var splitGeo = new THREE.BoxGeometry(bWid * 1.05, 0.03, 0.15);
+    var splitGeo = new THREE.BoxGeometry(bWid * 1.02, 0.04, 0.12);
     var splitter = new THREE.Mesh(splitGeo, darkMat);
-    splitter.position.set(0, 0.17, bLen * 0.5);
+    splitter.position.set(0, 0.14, bLen * 0.5);
     group.add(splitter);
 
     // --- Rear diffuser ---
-    var diffGeo = new THREE.BoxGeometry(bWid * 0.95, 0.08, 0.2);
+    var diffGeo = new THREE.BoxGeometry(bWid * 0.9, 0.06, 0.15);
     var diffuser = new THREE.Mesh(diffGeo, darkMat);
-    diffuser.position.set(0, 0.18, -bLen * 0.48);
+    diffuser.position.set(0, 0.15, -bLen * 0.48);
     group.add(diffuser);
-    // Diffuser fins
-    for (var df = -2; df <= 2; df++) {
-        var finGeo = new THREE.BoxGeometry(0.02, 0.06, 0.18);
-        var fin = new THREE.Mesh(finGeo, darkMat);
-        fin.position.set(df * 0.12, 0.19, -bLen * 0.48);
-        group.add(fin);
-    }
 
     // --- Side skirts ---
     for (var sk = -1; sk <= 1; sk += 2) {
-        var skirtGeo = new THREE.BoxGeometry(0.06, 0.1, bLen * 0.7);
+        var skirtGeo = new THREE.BoxGeometry(0.06, 0.12, bLen * 0.8);
         var skirt = new THREE.Mesh(skirtGeo, darkMat);
         skirt.position.set(sk * bWid * 0.52, 0.17, 0);
         group.add(skirt);
     }
 
-    // --- Fenders (wheel arches) ---
-    var fenderGeo = new THREE.TorusGeometry(0.22, 0.04, 6, 10, Math.PI);
-    var fenderPositions = [
-        [-bWid * 0.5, 0.2, bLen * 0.32],
-        [bWid * 0.5, 0.2, bLen * 0.32],
-        [-bWid * 0.5, 0.2, -bLen * 0.32],
-        [bWid * 0.5, 0.2, -bLen * 0.32]
-    ];
-    for (var fi = 0; fi < fenderPositions.length; fi++) {
-        var fender = new THREE.Mesh(fenderGeo, bodyMat);
-        fender.position.set(fenderPositions[fi][0], fenderPositions[fi][1], fenderPositions[fi][2]);
-        fender.rotation.y = (fi % 2 === 0) ? -Math.PI / 2 : Math.PI / 2;
-        fender.rotation.z = Math.PI;
-        group.add(fender);
-    }
-
     // --- Windshield (angled) ---
-    var wsGeo = new THREE.PlaneGeometry(bWid * 0.72, 0.3);
+    var wsGeo = new THREE.BoxGeometry(bWid * 0.75, 0.28, 0.04);
     var ws = new THREE.Mesh(wsGeo, glassMat);
-    ws.position.set(0, 0.7, bLen * 0.12);
-    ws.rotation.x = 0.35;
+    ws.position.set(0, 0.63, bLen * 0.12);
+    ws.rotation.x = 0.4;
     group.add(ws);
 
-    // Side windows
-    for (var sw = -1; sw <= 1; sw += 2) {
-        var swGeo = new THREE.PlaneGeometry(bLen * 0.2, 0.22);
-        var swMesh = new THREE.Mesh(swGeo, glassMat);
-        swMesh.position.set(sw * bWid * 0.43, 0.68, -bLen * 0.04);
-        swMesh.rotation.y = sw * Math.PI / 2;
-        group.add(swMesh);
-    }
-
-    // Rear window
-    var rwGeo = new THREE.PlaneGeometry(bWid * 0.65, 0.22);
+    // --- Rear window ---
+    var rwGeo = new THREE.BoxGeometry(bWid * 0.65, 0.2, 0.04);
     var rw = new THREE.Mesh(rwGeo, glassMat);
-    rw.position.set(0, 0.68, -bLen * 0.18);
-    rw.rotation.x = -0.25;
-    rw.rotation.y = Math.PI;
+    rw.position.set(0, 0.6, -bLen * 0.2);
+    rw.rotation.x = -0.3;
     group.add(rw);
 
-    // --- Hood scoop ---
-    var scoopGeo = new THREE.BoxGeometry(0.22, 0.1, 0.25);
-    var scoop = new THREE.Mesh(scoopGeo, darkMat);
-    scoop.position.set(0, 0.57, bLen * 0.3);
-    group.add(scoop);
-
-    // --- Roof fin / antenna ---
-    var antGeo = new THREE.BoxGeometry(0.03, 0.12, 0.08);
-    var ant = new THREE.Mesh(antGeo, darkMat);
-    ant.position.set(0, 0.88, -bLen * 0.08);
-    group.add(ant);
-
-    // --- Spoiler (GT wing) ---
-    var spoilerGeo = new THREE.BoxGeometry(bWid * 1.0, 0.04, 0.18);
+    // --- Spoiler ---
+    var spoilerGeo = new THREE.BoxGeometry(bWid * 1.0, 0.04, 0.15);
     var spoiler = new THREE.Mesh(spoilerGeo, darkMat);
-    spoiler.position.set(0, 0.88, -bLen * 0.42);
+    spoiler.position.set(0, 0.8, -bLen * 0.42);
     group.add(spoiler);
-    // Spoiler endplates
-    for (var sp = -1; sp <= 1; sp += 2) {
-        var epGeo = new THREE.BoxGeometry(0.03, 0.12, 0.22);
-        var ep = new THREE.Mesh(epGeo, darkMat);
-        ep.position.set(sp * bWid * 0.5, 0.84, -bLen * 0.42);
-        group.add(ep);
-    }
-    // Spoiler supports (swan neck)
+    // Spoiler supports
     for (var ss = -1; ss <= 1; ss += 2) {
-        var supGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.2, 6);
+        var supGeo = new THREE.BoxGeometry(0.04, 0.18, 0.04);
         var sup = new THREE.Mesh(supGeo, chromeMat);
-        sup.position.set(ss * bWid * 0.3, 0.78, -bLen * 0.42);
+        sup.position.set(ss * bWid * 0.35, 0.7, -bLen * 0.42);
         group.add(sup);
     }
 
-    // --- Headlights (complex) ---
+    // --- Headlights ---
     for (var hl = -1; hl <= 1; hl += 2) {
-        // Housing
-        var hlHousingGeo = new THREE.BoxGeometry(0.22, 0.1, 0.08);
-        var hlHousing = new THREE.Mesh(hlHousingGeo, darkMat);
-        hlHousing.position.set(hl * bWid * 0.33, 0.4, bLen * 0.5);
-        group.add(hlHousing);
-        // Bulb
-        var hlGeo = new THREE.SphereGeometry(0.06, 10, 10);
+        var hlGeo = new THREE.BoxGeometry(0.2, 0.08, 0.06);
         var hlMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
         var hlMesh = new THREE.Mesh(hlGeo, hlMat);
-        hlMesh.position.set(hl * bWid * 0.33, 0.4, bLen * 0.51);
+        hlMesh.position.set(hl * bWid * 0.35, 0.35, bLen * 0.51);
         group.add(hlMesh);
-        // DRL strip
-        var drlGeo = new THREE.BoxGeometry(0.18, 0.02, 0.02);
-        var drlMat = new THREE.MeshBasicMaterial({ color: 0xccddff });
-        var drl = new THREE.Mesh(drlGeo, drlMat);
-        drl.position.set(hl * bWid * 0.33, 0.36, bLen * 0.51);
+        // DRL
+        var drlGeo = new THREE.BoxGeometry(0.16, 0.02, 0.02);
+        var drl = new THREE.Mesh(drlGeo, new THREE.MeshBasicMaterial({ color: 0xccddff }));
+        drl.position.set(hl * bWid * 0.35, 0.3, bLen * 0.51);
         group.add(drl);
 
         if (isPlayer) {
-            var hlLight = new THREE.SpotLight(0xffffff, 2.5, 35, 0.35, 0.5);
-            hlLight.position.set(hl * bWid * 0.33, 0.4, bLen * 0.5);
-            hlLight.target.position.set(hl * bWid * 0.15, 0, bLen * 0.5 + 12);
+            var hlLight = new THREE.SpotLight(0xffffff, 2, 30, 0.35, 0.5);
+            hlLight.position.set(hl * bWid * 0.35, 0.35, bLen * 0.5);
+            hlLight.target.position.set(hl * bWid * 0.1, 0, bLen * 0.5 + 10);
             group.add(hlLight);
             group.add(hlLight.target);
         }
     }
 
-    // --- Tail lights (LED strip style) ---
+    // --- Tail lights ---
     group.userData.tailLights = [];
     for (var tl = -1; tl <= 1; tl += 2) {
-        var tlGeo = new THREE.BoxGeometry(0.2, 0.04, 0.03);
+        var tlGeo = new THREE.BoxGeometry(0.18, 0.06, 0.04);
         var tlMat = new THREE.MeshBasicMaterial({ color: 0xff0022 });
         var tlMesh = new THREE.Mesh(tlGeo, tlMat);
-        tlMesh.position.set(tl * bWid * 0.3, 0.4, -bLen * 0.5);
+        tlMesh.position.set(tl * bWid * 0.35, 0.35, -bLen * 0.51);
         group.add(tlMesh);
         group.userData.tailLights.push(tlMesh);
-        // Lower accent
-        var tlAccent = new THREE.Mesh(
-            new THREE.BoxGeometry(0.15, 0.02, 0.03),
-            new THREE.MeshBasicMaterial({ color: 0xff4400 })
-        );
-        tlAccent.position.set(tl * bWid * 0.3, 0.36, -bLen * 0.5);
-        group.add(tlAccent);
     }
-    // Center tail light strip
-    var ctlGeo = new THREE.BoxGeometry(bWid * 0.3, 0.02, 0.02);
-    var ctlMat = new THREE.MeshBasicMaterial({ color: 0xff0022 });
-    var ctl = new THREE.Mesh(ctlGeo, ctlMat);
-    ctl.position.set(0, 0.4, -bLen * 0.5);
+    // Center tail strip
+    var ctlGeo = new THREE.BoxGeometry(bWid * 0.3, 0.03, 0.03);
+    var ctl = new THREE.Mesh(ctlGeo, new THREE.MeshBasicMaterial({ color: 0xff0022 }));
+    ctl.position.set(0, 0.35, -bLen * 0.51);
     group.add(ctl);
 
     // --- Side mirrors ---
     for (var sm = -1; sm <= 1; sm += 2) {
-        // Arm
-        var armGeo = new THREE.BoxGeometry(0.14, 0.03, 0.03);
-        var arm = new THREE.Mesh(armGeo, darkMat);
-        arm.position.set(sm * (bWid * 0.53), 0.57, bLen * 0.08);
-        group.add(arm);
-        // Mirror head
-        var mirGeo = new THREE.BoxGeometry(0.08, 0.06, 0.06);
+        var mirGeo = new THREE.BoxGeometry(0.1, 0.06, 0.06);
         var mir = new THREE.Mesh(mirGeo, chromeMat);
-        mir.position.set(sm * (bWid * 0.59), 0.57, bLen * 0.08);
+        mir.position.set(sm * (bWid * 0.56), 0.5, bLen * 0.08);
         group.add(mir);
     }
 
-    // --- Wheels (high-poly with brake discs) ---
-    var tireGeo = new THREE.TorusGeometry(0.18, 0.07, 10, 20);
+    // --- Wheels (simplified, no torus) ---
     var tireMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.85 });
-    var rimGeo = new THREE.CylinderGeometry(0.14, 0.14, 0.1, 12);
-    var rimMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.95, roughness: 0.05 });
-    var brakeGeo = new THREE.CylinderGeometry(0.1, 0.1, 0.04, 10);
-    var brakeMat = new THREE.MeshStandardMaterial({ color: 0x993333, metalness: 0.3 });
+    var rimMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.9, roughness: 0.05 });
 
     var wheelPositions = [
-        [-bWid * 0.52, 0.18, bLen * 0.34],
-        [bWid * 0.52, 0.18, bLen * 0.34],
-        [-bWid * 0.52, 0.18, -bLen * 0.34],
-        [bWid * 0.52, 0.18, -bLen * 0.34]
+        [-bWid * 0.52, 0.15, bLen * 0.34],
+        [bWid * 0.52, 0.15, bLen * 0.34],
+        [-bWid * 0.52, 0.15, -bLen * 0.34],
+        [bWid * 0.52, 0.15, -bLen * 0.34]
     ];
 
     group.userData.wheels = [];
     for (var wi = 0; wi < wheelPositions.length; wi++) {
         var wheelGroup = new THREE.Group();
-        // Tire
+        // Tire (cylinder instead of torus)
+        var tireGeo = new THREE.CylinderGeometry(0.2, 0.2, 0.12, 10);
         var tire = new THREE.Mesh(tireGeo, tireMat);
-        tire.rotation.y = Math.PI / 2;
+        tire.rotation.z = Math.PI / 2;
         wheelGroup.add(tire);
         // Rim
+        var rimGeo = new THREE.CylinderGeometry(0.13, 0.13, 0.13, 8);
         var rim = new THREE.Mesh(rimGeo, rimMat);
         rim.rotation.z = Math.PI / 2;
         wheelGroup.add(rim);
-        // Brake disc
-        var brake = new THREE.Mesh(brakeGeo, brakeMat);
-        brake.rotation.z = Math.PI / 2;
-        wheelGroup.add(brake);
-        // Spoke detail
-        for (var sp2 = 0; sp2 < 5; sp2++) {
-            var spokeGeo = new THREE.BoxGeometry(0.13, 0.02, 0.015);
-            var spoke = new THREE.Mesh(spokeGeo, rimMat);
-            spoke.rotation.z = (sp2 / 5) * Math.PI;
-            wheelGroup.add(spoke);
-        }
 
         wheelGroup.position.set(wheelPositions[wi][0], wheelPositions[wi][1], wheelPositions[wi][2]);
-        // wheelGroup.castShadow = true;
         group.add(wheelGroup);
         group.userData.wheels.push(wheelGroup);
     }
 
-    // --- Exhaust tips (chrome) ---
+    // --- Exhaust tips ---
     for (var ex = -1; ex <= 1; ex += 2) {
-        var exGeo = new THREE.CylinderGeometry(0.035, 0.05, 0.18, 10);
+        var exGeo = new THREE.CylinderGeometry(0.03, 0.04, 0.12, 6);
         var exMesh = new THREE.Mesh(exGeo, chromeMat);
         exMesh.rotation.x = Math.PI / 2;
-        exMesh.position.set(ex * 0.22, 0.2, -bLen * 0.54);
+        exMesh.position.set(ex * 0.2, 0.16, -bLen * 0.54);
         group.add(exMesh);
     }
 
     // --- Underbody neon glow ---
     var underGeo = new THREE.PlaneGeometry(bWid * 0.85, bLen * 0.85);
     var underMat = new THREE.MeshBasicMaterial({
-        color: color, transparent: true, opacity: 0.2, side: THREE.DoubleSide
+        color: color, transparent: true, opacity: 0.3, side: THREE.DoubleSide
     });
     var under = new THREE.Mesh(underGeo, underMat);
     under.rotation.x = -Math.PI / 2;
     under.position.y = 0.03;
     group.add(under);
+
+    // --- Neon trim lines (bright at night) ---
+    var trimMat = new THREE.MeshBasicMaterial({ color: color });
+    var trimGeo = new THREE.BoxGeometry(bWid * 1.01, 0.02, 0.02);
+    var trimF = new THREE.Mesh(trimGeo, trimMat);
+    trimF.position.set(0, 0.14, bLen * 0.3);
+    group.add(trimF);
+    var trimR = trimF.clone();
+    trimR.position.z = -bLen * 0.3;
+    group.add(trimR);
 
     // Car data
     group.userData.trackT = 0;
