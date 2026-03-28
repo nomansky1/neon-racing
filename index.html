@@ -22,8 +22,11 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;touch-action:no
 /* HUD Controls */
 .ctrl-btn{position:fixed;pointer-events:all;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:bold;font-family:'Courier New',monospace;z-index:15;border:2px solid rgba(138,43,226,0.6);background:rgba(20,10,40,0.45);color:rgba(255,255,255,0.8);-webkit-tap-highlight-color:transparent}
 .ctrl-btn:active,.ctrl-btn.active{background:rgba(57,255,20,0.3);border-color:#39ff14;color:#39ff14;box-shadow:0 0 15px rgba(57,255,20,0.4)}
-#btn-left{bottom:100px;left:12px;width:70px;height:70px}
-#btn-right{bottom:100px;left:92px;width:70px;height:70px}
+#btn-left{display:none!important}
+#btn-right{display:none!important}
+#joystick-zone{position:fixed;bottom:20px;left:20px;width:130px;height:130px;z-index:15;pointer-events:all;-webkit-tap-highlight-color:transparent}
+#joystick-base{position:absolute;top:0;left:0;width:130px;height:130px;border-radius:50%;background:rgba(20,10,40,0.4);border:2px solid rgba(138,43,226,0.5)}
+#joystick-thumb{position:absolute;width:56px;height:56px;border-radius:50%;background:rgba(57,255,20,0.3);border:2px solid rgba(57,255,20,0.6);top:37px;left:37px;transition:none;box-shadow:0 0 12px rgba(57,255,20,0.3)}
 #btn-gas{bottom:12px;right:12px;width:90px;height:80px;background:rgba(0,100,0,0.4);border-color:rgba(57,255,20,0.6)}
 #btn-gas:active,#btn-gas.active{background:rgba(57,255,20,0.4);border-color:#39ff14}
 #btn-brake{bottom:12px;right:112px;width:80px;height:80px;background:rgba(100,0,0,0.4);border-color:rgba(255,50,50,0.6)}
@@ -64,6 +67,11 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;touch-action:no
 <canvas id="minimap" style="display:none"></canvas>
 
 <!-- Controls -->
+<div id="joystick-zone" style="display:none">
+    <div id="joystick-base">
+        <div id="joystick-thumb"></div>
+    </div>
+</div>
 <div id="btn-left" class="ctrl-btn" style="display:none">&#9664;</div>
 <div id="btn-right" class="ctrl-btn" style="display:none">&#9654;</div>
 <div id="btn-gas" class="ctrl-btn" style="display:none">GAS</div>
@@ -109,10 +117,10 @@ var dayNightTime = 0;
 var DAY_CYCLE_SPEED = 0.015; // full cycle ~420s
 var ambientLight, dirLight, hemiLight;
 var skyColors = {
-    day:   { sky: 0x5588cc, fog: 0x88aacc, ambient: 0x8899bb, dir: 0xffeedd, hemi: 0x88bbff, ground: 0x445566, exposure: 1.8 },
-    dusk:  { sky: 0x331844, fog: 0x221133, ambient: 0x554466, dir: 0xff6633, hemi: 0x553366, ground: 0x221122, exposure: 1.2 },
-    night: { sky: 0x020010, fog: 0x020010, ambient: 0x222244, dir: 0x4444aa, hemi: 0x111133, ground: 0x050510, exposure: 0.8 },
-    dawn:  { sky: 0x443355, fog: 0x332244, ambient: 0x665577, dir: 0xffaa55, hemi: 0x554477, ground: 0x332233, exposure: 1.3 }
+    day:   { sky: 0x6699dd, fog: 0x99bbdd, ambient: 0xaabbcc, dir: 0xfff5e0, hemi: 0x99ccff, ground: 0x556655, exposure: 2.0 },
+    dusk:  { sky: 0x553366, fog: 0x442255, ambient: 0x776688, dir: 0xff7744, hemi: 0x664477, ground: 0x332233, exposure: 1.4 },
+    night: { sky: 0x050515, fog: 0x050515, ambient: 0x334455, dir: 0x5555aa, hemi: 0x222244, ground: 0x0a0a15, exposure: 1.0 },
+    dawn:  { sky: 0x665577, fog: 0x554466, ambient: 0x887799, dir: 0xffbb66, hemi: 0x776688, ground: 0x443344, exposure: 1.5 }
 };
 var clouds = [];
 
@@ -167,13 +175,13 @@ function initThree() {
     clock = new THREE.Clock();
 
     // Lights
-    ambientLight = new THREE.AmbientLight(0x222244, 0.6);
+    ambientLight = new THREE.AmbientLight(0x445566, 1.0);
     scene.add(ambientLight);
 
-    hemiLight = new THREE.HemisphereLight(0x88bbff, 0x111133, 0.3);
+    hemiLight = new THREE.HemisphereLight(0x99bbdd, 0x334422, 0.6);
     scene.add(hemiLight);
 
-    dirLight = new THREE.DirectionalLight(0x8888ff, 0.4);
+    dirLight = new THREE.DirectionalLight(0xffeedd, 0.8);
     dirLight.position.set(50, 80, 50);
     dirLight.castShadow = true;
     dirLight.shadow.mapSize.set(1024, 1024);
@@ -187,10 +195,10 @@ function initThree() {
 
     // Ground plane
     var groundGeo = new THREE.PlaneGeometry(2000, 2000);
-    var groundMat = new THREE.MeshStandardMaterial({ color: 0x050510, roughness: 0.95 });
+    var groundMat = new THREE.MeshStandardMaterial({ color: 0x223322, roughness: 0.95 });
     var ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.1;
+    ground.position.y = -0.15;
     ground.receiveShadow = true;
     scene.add(ground);
     // store ref for day/night color changes
@@ -355,10 +363,9 @@ function generateTrack() {
 }
 
 function buildRoadMesh() {
-    var divisions = 500;
-    var pts = trackCurve.getSpacedPoints(divisions);
+    var divisions = 600;
     var geo = new THREE.BufferGeometry();
-    var verts = [], uvs = [], indices = [];
+    var verts = [], uvs = [], indices = [], colors = [];
     var halfW = ROAD_WIDTH / 2;
 
     for (var i = 0; i <= divisions; i++) {
@@ -370,8 +377,13 @@ function buildRoadMesh() {
         var l = pt.clone().addScaledVector(right, -halfW);
         var r = pt.clone().addScaledVector(right, halfW);
 
-        verts.push(l.x, 0.01, l.z, r.x, 0.01, r.z);
-        uvs.push(0, t * 50, 1, t * 50);
+        // Raise road slightly above ground to avoid z-fighting
+        verts.push(l.x, 0.05, l.z, r.x, 0.05, r.z);
+        uvs.push(0, t * 80, 1, t * 80);
+
+        // Subtle color variation for realism
+        var shade = 0.38 + Math.sin(t * 50) * 0.02;
+        colors.push(shade, shade, shade + 0.02, shade, shade, shade + 0.02);
 
         if (i < divisions) {
             var a = i * 2, b = i * 2 + 1, c = (i + 1) * 2, d = (i + 1) * 2 + 1;
@@ -381,18 +393,48 @@ function buildRoadMesh() {
 
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     geo.setIndex(indices);
     geo.computeVertexNormals();
 
-    // Road texture - dark asphalt with slight detail
+    // Realistic bright asphalt
     var roadMat = new THREE.MeshStandardMaterial({
-        color: 0x1a1a2e,
-        roughness: 0.7,
-        metalness: 0.1
+        color: 0x666672,
+        roughness: 0.85,
+        metalness: 0.02,
+        vertexColors: true
     });
 
     var mesh = new THREE.Mesh(geo, roadMat);
     mesh.receiveShadow = true;
+
+    // Add shoulder strips (lighter edges)
+    for (var side = -1; side <= 1; side += 2) {
+        var shoulderGeo = new THREE.BufferGeometry();
+        var sv = [], si = [];
+        var sw = 0.6;
+        for (var j = 0; j <= divisions; j++) {
+            var st = j / divisions;
+            var spt = trackCurve.getPointAt(st);
+            var stan = trackCurve.getTangentAt(st).normalize();
+            var sright = new THREE.Vector3(-stan.z, 0, stan.x);
+            var inner = spt.clone().addScaledVector(sright, side * halfW);
+            var outer = spt.clone().addScaledVector(sright, side * (halfW + sw));
+            sv.push(inner.x, 0.04, inner.z, outer.x, 0.04, outer.z);
+            if (j < divisions) {
+                var sa = j * 2, sb = j * 2 + 1, sc = (j+1) * 2, sd = (j+1) * 2 + 1;
+                si.push(sa, sc, sb, sb, sc, sd);
+            }
+        }
+        shoulderGeo.setAttribute('position', new THREE.Float32BufferAttribute(sv, 3));
+        shoulderGeo.setIndex(si);
+        shoulderGeo.computeVertexNormals();
+        var shoulderMat = new THREE.MeshStandardMaterial({ color: 0x888890, roughness: 0.9 });
+        var shoulderMesh = new THREE.Mesh(shoulderGeo, shoulderMat);
+        shoulderMesh.receiveShadow = true;
+        mesh.add(shoulderMesh);
+    }
+
     return mesh;
 }
 
@@ -411,8 +453,8 @@ function buildBarriers() {
             var right = new THREE.Vector3(-tan.z, 0, tan.x);
             var pos = pt.clone().addScaledVector(right, side * halfW);
 
-            verts.push(pos.x, 0, pos.z);
-            verts.push(pos.x, 0.6, pos.z);
+            verts.push(pos.x, 0.05, pos.z);
+            verts.push(pos.x, 0.65, pos.z);
 
             if (i < divisions) {
                 var a = i * 2, b = i * 2 + 1, c = (i + 1) * 2, d = (i + 1) * 2 + 1;
@@ -461,10 +503,10 @@ function buildLaneMarkings() {
             var a1 = p1.clone().addScaledVector(r1, offset - hw);
             var b1 = p1.clone().addScaledVector(r1, offset + hw);
 
-            verts.push(a0.x, 0.02, a0.z);
-            verts.push(b0.x, 0.02, b0.z);
-            verts.push(a1.x, 0.02, a1.z);
-            verts.push(b1.x, 0.02, b1.z);
+            verts.push(a0.x, 0.07, a0.z);
+            verts.push(b0.x, 0.07, b0.z);
+            verts.push(a1.x, 0.07, a1.z);
+            verts.push(b1.x, 0.07, b1.z);
             indices.push(idx, idx+2, idx+1, idx+1, idx+2, idx+3);
             idx += 4;
         }
@@ -487,7 +529,7 @@ function buildLaneMarkings() {
     var sl = new THREE.Mesh(slGeo, slMat);
     sl.rotation.x = -Math.PI / 2;
     sl.position.copy(pt);
-    sl.position.y = 0.03;
+    sl.position.y = 0.08;
     sl.lookAt(pt.clone().add(tan));
     sl.rotation.x = -Math.PI / 2;
     // Align to road direction
@@ -1245,6 +1287,23 @@ function updateCar(car, dt, isPlayer) {
     lookTarget.y = car.position.y;
     car.lookAt(lookTarget);
 
+    // Car physics: body roll (tilt) when turning
+    var steerDelta = ud.targetLaneOffset - ud.laneOffset;
+    var targetRoll = -steerDelta * 0.04 * Math.min(ud.speed / 20, 1); // roll into turn
+    if (!ud.bodyRoll) ud.bodyRoll = 0;
+    ud.bodyRoll += (targetRoll - ud.bodyRoll) * 0.1;
+    car.rotation.z = ud.bodyRoll;
+
+    // Pitch: nose dips on braking, rises on acceleration
+    var targetPitch = 0;
+    if (isPlayer) {
+        if (input.brake && ud.speed > 3) targetPitch = 0.03;
+        else if (input.gas || ud.nosActive) targetPitch = -0.015;
+    }
+    if (!ud.bodyPitch) ud.bodyPitch = 0;
+    ud.bodyPitch += (targetPitch - ud.bodyPitch) * 0.08;
+    car.rotation.x += ud.bodyPitch;
+
     // Wheel spin
     if (ud.wheels) {
         var wheelSpin = ud.speed * dt * 8;
@@ -1304,8 +1363,16 @@ function updatePlayerCar(dt) {
     var ud = playerCar.userData;
     if (ud.finished) { updateCar(playerCar, dt, true); return; }
 
-    // Gas
-    if (input.gas) {
+    // NOS check first (NOS implies acceleration even without gas held)
+    if (input.nos && ud.nos > 0) {
+        if (!ud.nosActive) playNosSound();
+        ud.nosActive = true;
+    } else {
+        ud.nosActive = false;
+    }
+
+    // Gas OR NOS = accelerate
+    if (input.gas || ud.nosActive) {
         var accel = ud.acceleration;
         var maxSpd = ud.maxSpeed;
         if (ud.nosActive && ud.nos > 0) {
@@ -1327,12 +1394,8 @@ function updatePlayerCar(dt) {
         if (ud.speed > 5) emitTireSmoke(playerCar);
     }
 
-    // NOS
-    if (input.nos && ud.nos > 0 && input.gas) {
-        if (!ud.nosActive) playNosSound();
-        ud.nosActive = true;
-    } else {
-        ud.nosActive = false;
+    // NOS already handled above
+    if (false) {
     }
 
     // NOS regen when not using
@@ -1340,17 +1403,20 @@ function updatePlayerCar(dt) {
         ud.nos = Math.min(MAX_NOS, ud.nos + NOS_REGEN);
     }
 
-    // Steering (lane change with smooth interpolation)
-    if (input.left) {
-        ud.targetLaneOffset -= 12 * dt;
-        ud.targetLaneOffset = Math.max(ud.targetLaneOffset, -ROAD_WIDTH / 2 + 1.5);
+    // Steering — analog joystick or keyboard
+    var steerAmount = 0;
+    if (Math.abs(joystickX) > 0.1) {
+        steerAmount = joystickX; // -1 to 1 analog
+    } else if (input.left) {
+        steerAmount = -1;
+    } else if (input.right) {
+        steerAmount = 1;
     }
-    if (input.right) {
-        ud.targetLaneOffset += 12 * dt;
-        ud.targetLaneOffset = Math.min(ud.targetLaneOffset, ROAD_WIDTH / 2 - 1.5);
-    }
+    var steerSpeed = 14 * Math.abs(steerAmount);
+    ud.targetLaneOffset += steerAmount * steerSpeed * dt;
+    ud.targetLaneOffset = Math.max(-ROAD_WIDTH / 2 + 1.5, Math.min(ROAD_WIDTH / 2 - 1.5, ud.targetLaneOffset));
 
-    ud.laneOffset += (ud.targetLaneOffset - ud.laneOffset) * 0.1;
+    ud.laneOffset += (ud.targetLaneOffset - ud.laneOffset) * 0.12;
 
     updateCar(playerCar, dt, true);
     updateEngineSound(ud.speed, ud.maxSpeed, ud.nosActive);
@@ -1468,11 +1534,11 @@ function updateCamera(dt) {
     var tan = trackCurve.getTangentAt(t).normalize();
     var right = new THREE.Vector3(-tan.z, 0, tan.x);
 
-    // Close behind car — tighter racing cam
+    // Close behind car — minimal zoom change on speed
     var camTarget = pt.clone().addScaledVector(right, playerCar.userData.laneOffset);
     var spdFactor = Math.min(playerCar.userData.speed / playerCar.userData.maxSpeed, 1);
-    var camDist = -3.8 - spdFactor * 1.5; // pulls back slightly at high speed
-    var camH = 1.8 + spdFactor * 0.6;
+    var camDist = -4.0 - spdFactor * 0.4; // barely pulls back at speed
+    var camH = 1.9 + spdFactor * 0.15;
     var camPos = camTarget.clone()
         .addScaledVector(tan, camDist)
         .add(new THREE.Vector3(0, camH, 0));
@@ -1593,8 +1659,7 @@ function showHUD() {
     speedo.style.display = 'block';
     nosBar.style.display = 'block';
     minimap.style.display = 'block';
-    document.getElementById('btn-left').style.display = 'flex';
-    document.getElementById('btn-right').style.display = 'flex';
+    document.getElementById('joystick-zone').style.display = 'block';
     document.getElementById('btn-gas').style.display = 'flex';
     document.getElementById('btn-brake').style.display = 'flex';
     document.getElementById('btn-nos').style.display = 'flex';
@@ -1605,8 +1670,7 @@ function hideHUD() {
     speedo.style.display = 'none';
     nosBar.style.display = 'none';
     minimap.style.display = 'none';
-    document.getElementById('btn-left').style.display = 'none';
-    document.getElementById('btn-right').style.display = 'none';
+    document.getElementById('joystick-zone').style.display = 'none';
     document.getElementById('btn-gas').style.display = 'none';
     document.getElementById('btn-brake').style.display = 'none';
     document.getElementById('btn-nos').style.display = 'none';
@@ -1635,9 +1699,80 @@ function updateHUD() {
 // ================================================================
 //  INPUT SETUP
 // ================================================================
+// Joystick state
+var joystickX = 0; // -1 to 1
+
+function setupJoystick() {
+    var zone = document.getElementById('joystick-zone');
+    var thumb = document.getElementById('joystick-thumb');
+    var base = document.getElementById('joystick-base');
+    var activeId = null;
+    var baseRect = null;
+    var centerX = 65, centerY = 65, maxDist = 37;
+
+    function updateThumb(cx) {
+        var dx = cx - centerX;
+        var clamped = Math.max(-maxDist, Math.min(maxDist, dx));
+        thumb.style.left = (centerX - 28 + clamped) + 'px';
+        joystickX = clamped / maxDist;
+        input.left = joystickX < -0.2;
+        input.right = joystickX > 0.2;
+    }
+
+    function resetThumb() {
+        thumb.style.left = '37px';
+        joystickX = 0;
+        input.left = false;
+        input.right = false;
+    }
+
+    zone.addEventListener('touchstart', function(e) {
+        e.preventDefault(); e.stopPropagation();
+        var t = e.changedTouches[0];
+        activeId = t.identifier;
+        baseRect = base.getBoundingClientRect();
+        var cx = t.clientX - baseRect.left;
+        updateThumb(cx);
+    }, { passive: false });
+
+    zone.addEventListener('touchmove', function(e) {
+        e.preventDefault(); e.stopPropagation();
+        for (var i = 0; i < e.changedTouches.length; i++) {
+            if (e.changedTouches[i].identifier === activeId && baseRect) {
+                var cx = e.changedTouches[i].clientX - baseRect.left;
+                updateThumb(cx);
+            }
+        }
+    }, { passive: false });
+
+    zone.addEventListener('touchend', function(e) {
+        for (var i = 0; i < e.changedTouches.length; i++) {
+            if (e.changedTouches[i].identifier === activeId) {
+                activeId = null;
+                resetThumb();
+            }
+        }
+    });
+    zone.addEventListener('touchcancel', function() { activeId = null; resetThumb(); });
+
+    // Mouse fallback
+    var mouseDown = false;
+    zone.addEventListener('mousedown', function(e) {
+        mouseDown = true;
+        baseRect = base.getBoundingClientRect();
+        updateThumb(e.clientX - baseRect.left);
+    });
+    window.addEventListener('mousemove', function(e) {
+        if (mouseDown && baseRect) updateThumb(e.clientX - baseRect.left);
+    });
+    window.addEventListener('mouseup', function() { if (mouseDown) { mouseDown = false; resetThumb(); } });
+}
+
 function setupInput() {
-    var btnIds = ['btn-left', 'btn-right', 'btn-gas', 'btn-brake', 'btn-nos'];
-    var inputKeys = ['left', 'right', 'gas', 'brake', 'nos'];
+    setupJoystick();
+
+    var btnIds = ['btn-gas', 'btn-brake', 'btn-nos'];
+    var inputKeys = ['gas', 'brake', 'nos'];
 
     for (var i = 0; i < btnIds.length; i++) {
         (function(idx) {
