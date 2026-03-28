@@ -27,11 +27,6 @@
 <body>
 <canvas id="c"></canvas>
 <script>
-// ============================================================
-//  NEON RACING — single-file HTML5 endless racer
-//  Mobile-compatible build
-// ============================================================
-
 window.addEventListener('load', function() {
     'use strict';
 
@@ -39,7 +34,6 @@ window.addEventListener('load', function() {
     var ctx = canvas.getContext('2d');
     var dpr = window.devicePixelRatio || 1;
 
-    // --- Canvas resize (DPR-aware) ---
     function resize() {
         var w = window.innerWidth || document.documentElement.clientWidth || 360;
         var h = window.innerHeight || document.documentElement.clientHeight || 640;
@@ -48,78 +42,115 @@ window.addEventListener('load', function() {
         canvas.style.width  = w + 'px';
         canvas.style.height = h + 'px';
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        recalcLanes();
     }
 
-    // Logical dimensions (use these everywhere instead of canvas.width/height)
-    function W() { return (canvas.width / dpr); }
-    function H() { return (canvas.height / dpr); }
+    function SW() { return canvas.width / dpr; }
+    function SH() { return canvas.height / dpr; }
 
-    // --- Constants ---
-    var CAR_W = 40;
-    var CAR_H = 70;
-    var NUM_LANES = 3;
-    var ROAD_FRAC = 0.6;
-    var LANE_CHANGE_SPEED = 0.15;
-    var BASE_SPEED = 4;
-    var MAX_SPEED = 18;
-    var SPEED_INC = 0.002;
-    var SPAWN_INTERVAL_MIN = 30;
-    var SPAWN_INTERVAL_MAX = 90;
-    var PARTICLE_LIFE = 30;
+    // ============================================================
+    //  CONSTANTS
+    // ============================================================
+    var ROAD_W        = 2400;       // world-space road width
+    var SEG_LENGTH    = 200;        // depth of each road segment
+    var DRAW_DIST     = 180;        // how many segments to draw
+    var NUM_LANES     = 3;
+    var LANE_W        = ROAD_W / NUM_LANES;
+    var CAM_HEIGHT    = 1200;       // camera height above road
+    var CAM_DEPTH     = 0.84;       // camera depth factor (FOV)
+    var BASE_SPEED    = 180;        // starting speed (world units/frame)
+    var MAX_SPEED     = 500;
+    var SPEED_INC     = 0.08;
+    var SPAWN_MIN     = 40;         // segment gap between obstacles (at max speed)
+    var SPAWN_MAX     = 100;        // segment gap at base speed
 
-    // Colors
-    var CLR_ROAD       = '#0a0a0a';
-    var CLR_EDGE       = '#8a2be2';
-    var CLR_LANE       = '#4444ff';
-    var CLR_PLAYER     = '#39ff14';
-    var CLR_SPEED_LINE = 'rgba(0,255,255,0.25)';
+    // Neon colors
+    var CLR_SKY       = '#05050f';
+    var CLR_ROAD1     = '#0a0a12';
+    var CLR_ROAD2     = '#08080e';
+    var CLR_GRASS1    = '#060612';
+    var CLR_GRASS2    = '#04040e';
+    var CLR_RUMBLE1   = '#8a2be2';
+    var CLR_RUMBLE2   = '#6a1bb2';
+    var CLR_LANE_LINE = '#4444ff';
+    var CLR_PLAYER    = '#39ff14';
+    var CLR_EDGE_GLOW = '#8a2be2';
 
-    // --- Layout ---
-    var roadLeft = 0, roadRight = 0, roadW = 0, laneW = 0, laneX = [0,0,0];
-
-    function recalcLanes() {
-        var w = W();
-        roadW     = Math.min(w * ROAD_FRAC, 280);
-        roadLeft  = (w - roadW) / 2;
-        roadRight = roadLeft + roadW;
-        laneW     = roadW / NUM_LANES;
-        laneX[0]  = roadLeft + laneW * 0 + laneW / 2;
-        laneX[1]  = roadLeft + laneW * 1 + laneW / 2;
-        laneX[2]  = roadLeft + laneW * 2 + laneW / 2;
-    }
-
-    // --- State ---
+    // ============================================================
+    //  STATE
+    // ============================================================
     var state = 'menu';
-    var score = 0, speed = BASE_SPEED, spawnTimer = 0, spawnInterval = SPAWN_INTERVAL_MAX;
-    var player = { lane: 1, x: 0, y: 0, w: CAR_W, h: CAR_H };
+    var score = 0;
+    var speed = BASE_SPEED;
+    var position = 0;           // camera Z position in world
+    var playerX = 0;            // -1 to 1 across road
+    var playerLane = 1;         // 0, 1, 2
+    var targetPlayerX = 0;
     var obstacles = [];
     var particles = [];
-    var speedLines = [];
+    var nextSpawn = 60;
+    var spawnCounter = 0;
     var highScore = 0;
-    var dashOffset = 0;
+    var starField = [];
 
-    try { highScore = parseInt(localStorage.getItem('neonRacingHigh')) || 0; } catch(e) { highScore = 0; }
+    // HUD buttons
+    var btnLeft  = { x: 0, y: 0, w: 0, h: 0, pressed: false };
+    var btnRight = { x: 0, y: 0, w: 0, h: 0, pressed: false };
 
-    // --- Audio ---
+    try { highScore = parseInt(localStorage.getItem('neonRacingHigh3D')) || 0; } catch(e) { highScore = 0; }
+
+    // Build road segments
+    var segments = [];
+    var totalSegments = 600;
+
+    function buildRoad() {
+        segments = [];
+        for (var i = 0; i < totalSegments; i++) {
+            segments.push({
+                z: i * SEG_LENGTH,
+                curve: 0,
+                obstacles: []
+            });
+        }
+    }
+
+    // Init star field
+    function buildStars() {
+        starField = [];
+        for (var i = 0; i < 80; i++) {
+            starField.push({
+                x: Math.random(),
+                y: Math.random() * 0.35,
+                size: 0.5 + Math.random() * 1.5,
+                flicker: Math.random() * Math.PI * 2
+            });
+        }
+    }
+
+    // Lane X positions (-1 to 1 scale)
+    function laneToX(lane) {
+        // lane 0 = left, 1 = center, 2 = right
+        return (lane - 1) * 0.6; // -0.6, 0, 0.6
+    }
+
+    // ============================================================
+    //  AUDIO
+    // ============================================================
     var audioCtx = null;
     var engineOsc = null, engineGain = null;
 
     function initAudio() {
         if (audioCtx) return;
-        try {
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        } catch(e) { audioCtx = null; }
+        try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) { audioCtx = null; }
     }
 
     function startEngine() {
         if (!audioCtx) return;
         try {
-            engineOsc  = audioCtx.createOscillator();
+            engineOsc = audioCtx.createOscillator();
             engineGain = audioCtx.createGain();
             engineOsc.type = 'sawtooth';
             engineOsc.frequency.value = 80;
-            engineGain.gain.value = 0.06;
+            engineGain.gain.value = 0.05;
             engineOsc.connect(engineGain).connect(audioCtx.destination);
             engineOsc.start();
         } catch(e) { engineOsc = null; }
@@ -128,8 +159,9 @@ window.addEventListener('load', function() {
     function updateEngineSound() {
         if (!engineOsc) return;
         try {
-            engineOsc.frequency.value = 60 + (speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED) * 120;
-            engineGain.gain.value = 0.04 + (speed / MAX_SPEED) * 0.05;
+            var t = (speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED);
+            engineOsc.frequency.value = 70 + t * 140;
+            engineGain.gain.value = 0.03 + t * 0.05;
         } catch(e) {}
     }
 
@@ -142,124 +174,45 @@ window.addEventListener('load', function() {
         try {
             var o = audioCtx.createOscillator();
             var g = audioCtx.createGain();
-            o.type = 'sine';
-            o.frequency.value = 880;
-            g.gain.value = 0.12;
+            o.type = 'sine'; o.frequency.value = 660;
+            g.gain.value = 0.1;
             o.connect(g).connect(audioCtx.destination);
             o.start();
-            g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.08);
-            o.stop(audioCtx.currentTime + 0.1);
+            g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.06);
+            o.stop(audioCtx.currentTime + 0.07);
         } catch(e) {}
     }
 
     function playCrash() {
         if (!audioCtx) return;
         try {
-            var bufferSize = Math.floor(audioCtx.sampleRate * 0.3);
-            var buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
-            var data = buffer.getChannelData(0);
-            for (var i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
-            var src = audioCtx.createBufferSource();
-            src.buffer = buffer;
-            var g = audioCtx.createGain();
-            g.gain.value = 0.25;
-            src.connect(g).connect(audioCtx.destination);
-            src.start();
+            var len = Math.floor(audioCtx.sampleRate * 0.3);
+            var buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+            var d = buf.getChannelData(0);
+            for (var i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+            var s = audioCtx.createBufferSource(); s.buffer = buf;
+            var g = audioCtx.createGain(); g.gain.value = 0.3;
+            s.connect(g).connect(audioCtx.destination); s.start();
         } catch(e) {}
     }
 
-    // --- Player ---
-    function resetPlayer() {
-        player.lane = 1;
-        player.x = laneX[1];
-        player.y = H() - CAR_H - 40;
-        player.w = CAR_W;
-        player.h = CAR_H;
-    }
-
-    // --- Obstacles ---
-    function spawnObstacle() {
-        var count = Math.random() < 0.3 ? 2 : 1;
-        var lanes = [];
-        while (lanes.length < count) {
-            var l = Math.floor(Math.random() * NUM_LANES);
-            if (lanes.indexOf(l) === -1) lanes.push(l);
-        }
-        for (var i = 0; i < lanes.length; i++) {
-            obstacles.push({
-                x: laneX[lanes[i]],
-                y: -CAR_H,
-                w: CAR_W,
-                h: CAR_H,
-                lane: lanes[i],
-                color: Math.random() < 0.5 ? '#ff4500' : '#ff2222'
-            });
-        }
-    }
-
-    // --- Particles ---
-    function emitTrail() {
-        particles.push({
-            x: player.x + (Math.random() - 0.5) * 10,
-            y: player.y + player.h,
-            vx: (Math.random() - 0.5) * 0.5,
-            vy: speed * 0.3 + Math.random(),
-            life: PARTICLE_LIFE,
-            maxLife: PARTICLE_LIFE,
-            r: 2 + Math.random() * 3,
-            explosion: false
-        });
-    }
-
-    function emitExplosion(x, y) {
-        for (var i = 0; i < 30; i++) {
-            var angle = Math.random() * Math.PI * 2;
-            var spd = 1 + Math.random() * 4;
-            particles.push({
-                x: x, y: y,
-                vx: Math.cos(angle) * spd,
-                vy: Math.sin(angle) * spd,
-                life: 40,
-                maxLife: 40,
-                r: 2 + Math.random() * 4,
-                explosion: true
-            });
-        }
-    }
-
-    // --- Speed lines ---
-    function spawnSpeedLine() {
-        var side = Math.random() < 0.5 ? roadLeft - Math.random() * 40 : roadRight + Math.random() * 40;
-        speedLines.push({
-            x: side, y: -20,
-            len: 20 + Math.random() * 40,
-            speed: speed * (0.8 + Math.random() * 0.4)
-        });
-    }
-
-    // --- Collision (AABB) ---
-    function collides(a, b) {
-        return (
-            a.x - a.w / 2 < b.x + b.w / 2 &&
-            a.x + a.w / 2 > b.x - b.w / 2 &&
-            a.y < b.y + b.h &&
-            a.y + a.h > b.y
-        );
-    }
-
-    // --- Start / restart ---
+    // ============================================================
+    //  GAME CONTROL
+    // ============================================================
     function startGame() {
         initAudio();
         if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
         score = 0;
         speed = BASE_SPEED;
-        spawnTimer = 0;
-        spawnInterval = SPAWN_INTERVAL_MAX;
+        position = 0;
+        playerLane = 1;
+        playerX = 0;
+        targetPlayerX = 0;
         obstacles = [];
         particles = [];
-        speedLines = [];
-        recalcLanes();
-        resetPlayer();
+        spawnCounter = 0;
+        nextSpawn = 60;
+        buildRoad();
         state = 'playing';
         startEngine();
     }
@@ -268,140 +221,575 @@ window.addEventListener('load', function() {
         state = 'gameover';
         stopEngine();
         playCrash();
-        emitExplosion(player.x, player.y);
+        // Explosion particles
+        for (var i = 0; i < 40; i++) {
+            var a = Math.random() * Math.PI * 2;
+            var sp = 1 + Math.random() * 5;
+            particles.push({
+                sx: SW() / 2 + (Math.random() - 0.5) * 60,
+                sy: SH() * 0.62,
+                vx: Math.cos(a) * sp,
+                vy: Math.sin(a) * sp - 2,
+                life: 50, maxLife: 50,
+                r: 2 + Math.random() * 5,
+                explosion: true
+            });
+        }
         if (score > highScore) {
             highScore = score;
-            try { localStorage.setItem('neonRacingHigh', String(highScore)); } catch(e) {}
+            try { localStorage.setItem('neonRacingHigh3D', String(highScore)); } catch(e) {}
         }
     }
 
-    // --- Input ---
-    function handleInput(x) {
+    // ============================================================
+    //  INPUT
+    // ============================================================
+    function moveLeft() {
+        if (state === 'playing' && playerLane > 0) {
+            playerLane--;
+            targetPlayerX = laneToX(playerLane);
+            playBlip();
+        }
+    }
+
+    function moveRight() {
+        if (state === 'playing' && playerLane < NUM_LANES - 1) {
+            playerLane++;
+            targetPlayerX = laneToX(playerLane);
+            playBlip();
+        }
+    }
+
+    function handleTap(x, y) {
         if (state === 'menu' || state === 'gameover') {
             startGame();
             return;
         }
-        if (state === 'playing') {
-            if (x < W() / 2) {
-                if (player.lane > 0) { player.lane--; playBlip(); }
-            } else {
-                if (player.lane < NUM_LANES - 1) { player.lane++; playBlip(); }
-            }
+        // Check HUD buttons
+        if (hitTest(x, y, btnLeft)) { moveLeft(); return; }
+        if (hitTest(x, y, btnRight)) { moveRight(); return; }
+        // Fallback: left/right half of screen (above buttons)
+        if (y < SH() - 120) {
+            if (x < SW() / 2) moveLeft();
+            else moveRight();
         }
     }
+
+    function hitTest(x, y, btn) {
+        return x >= btn.x && x <= btn.x + btn.w && y >= btn.y && y <= btn.y + btn.h;
+    }
+
+    // Touch handling with multi-touch for buttons
+    var activeTouches = {};
 
     canvas.addEventListener('touchstart', function(e) {
         e.preventDefault();
-        if (e.touches && e.touches.length > 0) {
-            handleInput(e.touches[0].clientX);
+        for (var i = 0; i < e.changedTouches.length; i++) {
+            var t = e.changedTouches[i];
+            activeTouches[t.identifier] = { x: t.clientX, y: t.clientY };
+            handleTap(t.clientX, t.clientY);
+            if (hitTest(t.clientX, t.clientY, btnLeft)) btnLeft.pressed = true;
+            if (hitTest(t.clientX, t.clientY, btnRight)) btnRight.pressed = true;
         }
     }, { passive: false });
 
-    canvas.addEventListener('touchmove', function(e) {
+    canvas.addEventListener('touchend', function(e) {
         e.preventDefault();
+        for (var i = 0; i < e.changedTouches.length; i++) {
+            var t = e.changedTouches[i];
+            var prev = activeTouches[t.identifier];
+            if (prev) {
+                if (hitTest(prev.x, prev.y, btnLeft)) btnLeft.pressed = false;
+                if (hitTest(prev.x, prev.y, btnRight)) btnRight.pressed = false;
+            }
+            delete activeTouches[t.identifier];
+        }
     }, { passive: false });
 
-    canvas.addEventListener('mousedown', function(e) {
-        handleInput(e.clientX);
+    canvas.addEventListener('touchmove', function(e) { e.preventDefault(); }, { passive: false });
+
+    canvas.addEventListener('mousedown', function(e) { handleTap(e.clientX, e.clientY); });
+
+    // Keyboard for desktop
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'ArrowLeft' || e.key === 'a') { if (state === 'menu' || state === 'gameover') startGame(); else moveLeft(); }
+        if (e.key === 'ArrowRight' || e.key === 'd') { if (state === 'menu' || state === 'gameover') startGame(); else moveRight(); }
     });
 
-    // --- Update ---
+    // ============================================================
+    //  3D PROJECTION
+    // ============================================================
+    function project(x, y, z, camX, camY, camZ, screenW, screenH) {
+        // Translate
+        var tx = x - camX;
+        var ty = y - camY;
+        var tz = z - camZ;
+        if (tz <= 0) tz = 0.1;
+        var scale = CAM_DEPTH / tz * screenH;
+        return {
+            sx: screenW / 2 + scale * tx,
+            sy: screenH / 2 - scale * ty,
+            scale: scale
+        };
+    }
+
+    // ============================================================
+    //  UPDATE
+    // ============================================================
     function update() {
-        if (state !== 'playing') return;
-
-        if (speed < MAX_SPEED) speed += SPEED_INC;
-        score += Math.round(speed);
-
-        // Smooth lane change
-        var targetX = laneX[player.lane];
-        player.x += (targetX - player.x) * LANE_CHANGE_SPEED;
-        player.y = H() - CAR_H - 40;
-
-        // Spawn obstacles
-        spawnInterval = SPAWN_INTERVAL_MAX - (speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED) * (SPAWN_INTERVAL_MAX - SPAWN_INTERVAL_MIN);
-        spawnTimer++;
-        if (spawnTimer >= spawnInterval) {
-            spawnObstacle();
-            spawnTimer = 0;
+        if (state !== 'playing') {
+            // Still update particles in gameover
+            updateParticles();
+            return;
         }
 
-        // Move obstacles
-        var i;
-        for (i = obstacles.length - 1; i >= 0; i--) {
-            obstacles[i].y += speed;
-            if (obstacles[i].y > H() + 100) {
+        // Speed ramp
+        if (speed < MAX_SPEED) speed += SPEED_INC;
+        score += Math.round(speed / 10);
+
+        // Move forward
+        position += speed;
+
+        // Smooth lane change
+        playerX += (targetPlayerX - playerX) * 0.12;
+
+        // Spawn obstacles
+        spawnCounter += speed;
+        var spawnGap = SPAWN_MAX - (speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED) * (SPAWN_MAX - SPAWN_MIN);
+        if (spawnCounter >= spawnGap * SEG_LENGTH) {
+            spawnCounter = 0;
+            // Pick 1-2 lanes
+            var count = Math.random() < 0.25 ? 2 : 1;
+            var usedLanes = [];
+            while (usedLanes.length < count) {
+                var ll = Math.floor(Math.random() * NUM_LANES);
+                if (usedLanes.indexOf(ll) === -1) usedLanes.push(ll);
+            }
+            for (var k = 0; k < usedLanes.length; k++) {
+                obstacles.push({
+                    z: position + DRAW_DIST * SEG_LENGTH,
+                    lane: usedLanes[k],
+                    x: laneToX(usedLanes[k]),
+                    hit: false
+                });
+            }
+        }
+
+        // Check collisions & clean up obstacles
+        for (var i = obstacles.length - 1; i >= 0; i--) {
+            var ob = obstacles[i];
+            var relZ = ob.z - position;
+            // Remove if behind camera
+            if (relZ < -500) {
                 obstacles.splice(i, 1);
                 continue;
             }
-            if (collides(player, obstacles[i])) {
-                gameOver();
-                return;
+            // Collision zone
+            if (relZ > -100 && relZ < 400 && !ob.hit) {
+                var dx = Math.abs(playerX - ob.x);
+                if (dx < 0.28) {
+                    ob.hit = true;
+                    gameOver();
+                    return;
+                }
             }
         }
 
-        // Trail particles
-        if (Math.random() < 0.6) emitTrail();
-
-        // Update particles
-        for (i = particles.length - 1; i >= 0; i--) {
-            var p = particles[i];
-            p.x += p.vx;
-            p.y += p.vy;
-            p.life--;
-            if (p.life <= 0) particles.splice(i, 1);
+        // Trail particles from player car
+        if (Math.random() < 0.5) {
+            var px = SW() / 2 + playerX * SW() * 0.2;
+            particles.push({
+                sx: px + (Math.random() - 0.5) * 20,
+                sy: SH() * 0.72 + Math.random() * 10,
+                vx: (Math.random() - 0.5) * 0.3,
+                vy: 0.5 + Math.random() * 1,
+                life: 20, maxLife: 20,
+                r: 1.5 + Math.random() * 2,
+                explosion: false
+            });
         }
 
-        // Speed lines
-        if (Math.random() < 0.3 + speed / MAX_SPEED * 0.5) spawnSpeedLine();
-        for (i = speedLines.length - 1; i >= 0; i--) {
-            speedLines[i].y += speedLines[i].speed;
-            if (speedLines[i].y > H() + 60) speedLines.splice(i, 1);
-        }
-
-        dashOffset = (dashOffset + speed) % 40;
+        updateParticles();
         updateEngineSound();
     }
 
-    // --- Draw helpers ---
-    function drawGlow(color, blur, fn) {
+    function updateParticles() {
+        for (var i = particles.length - 1; i >= 0; i--) {
+            var p = particles[i];
+            p.sx += p.vx;
+            p.sy += p.vy;
+            p.life--;
+            if (p.life <= 0) particles.splice(i, 1);
+        }
+    }
+
+    // ============================================================
+    //  DRAW
+    // ============================================================
+    function draw() {
+        var sw = SW(), sh = SH();
+        var horizonY = sh * 0.35;
+
+        // Sky
+        var skyGrad = ctx.createLinearGradient(0, 0, 0, horizonY);
+        skyGrad.addColorStop(0, '#020010');
+        skyGrad.addColorStop(0.5, '#08002a');
+        skyGrad.addColorStop(1, '#150040');
+        ctx.fillStyle = skyGrad;
+        ctx.fillRect(0, 0, sw, horizonY + 2);
+
+        // Stars
+        for (var si = 0; si < starField.length; si++) {
+            var star = starField[si];
+            var flick = 0.5 + 0.5 * Math.sin(Date.now() * 0.003 + star.flicker);
+            ctx.fillStyle = 'rgba(255,255,255,' + (flick * 0.8) + ')';
+            ctx.beginPath();
+            ctx.arc(star.x * sw, star.y * sh, star.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Horizon glow
         ctx.save();
-        ctx.shadowColor = color;
-        ctx.shadowBlur = blur;
-        fn();
+        ctx.shadowColor = '#8a2be2';
+        ctx.shadowBlur = 40;
+        ctx.strokeStyle = '#8a2be2';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, horizonY);
+        ctx.lineTo(sw, horizonY);
+        ctx.stroke();
+        ctx.restore();
+
+        // --- Draw road segments ---
+        var baseSegIdx = Math.floor(position / SEG_LENGTH);
+        var camZ = position;
+        var camX = playerX * ROAD_W * 0.5;
+        var camY = CAM_HEIGHT;
+
+        // We draw from far to near
+        var projections = [];
+        for (var n = DRAW_DIST; n >= 0; n--) {
+            var segIdx = baseSegIdx + n;
+            var worldZ = segIdx * SEG_LENGTH;
+
+            // Project left and right road edges
+            var pL = project(-ROAD_W / 2, 0, worldZ, camX, camY, camZ, sw, sh);
+            var pR = project(ROAD_W / 2, 0, worldZ, camX, camY, camZ, sw, sh);
+            var pC = project(0, 0, worldZ, camX, camY, camZ, sw, sh);
+
+            projections.push({
+                idx: segIdx,
+                worldZ: worldZ,
+                left: pL, right: pR, center: pC,
+                scale: pC.scale
+            });
+        }
+
+        // Draw from far (first in array) to near (last in array)
+        for (var d = 0; d < projections.length - 1; d++) {
+            var p0 = projections[d];       // far edge
+            var p1 = projections[d + 1];   // near edge
+
+            var y0 = p0.center.sy;
+            var y1 = p1.center.sy;
+
+            if (y0 > sh || y1 < horizonY - 10) continue;
+
+            var alt = p0.idx % 2;
+
+            // Grass
+            ctx.fillStyle = alt ? CLR_GRASS1 : CLR_GRASS2;
+            ctx.fillRect(0, y0, sw, y1 - y0 + 1);
+
+            // Road
+            ctx.fillStyle = alt ? CLR_ROAD1 : CLR_ROAD2;
+            ctx.beginPath();
+            ctx.moveTo(p0.left.sx, y0);
+            ctx.lineTo(p0.right.sx, y0);
+            ctx.lineTo(p1.right.sx, y1);
+            ctx.lineTo(p1.left.sx, y1);
+            ctx.closePath();
+            ctx.fill();
+
+            // Rumble strips (road edges)
+            var rumbleW0 = (p0.right.sx - p0.left.sx) * 0.04;
+            var rumbleW1 = (p1.right.sx - p1.left.sx) * 0.04;
+            var rumbleColor = alt ? CLR_RUMBLE1 : CLR_RUMBLE2;
+
+            // Left rumble
+            ctx.fillStyle = rumbleColor;
+            ctx.beginPath();
+            ctx.moveTo(p0.left.sx - rumbleW0, y0);
+            ctx.lineTo(p0.left.sx, y0);
+            ctx.lineTo(p1.left.sx, y1);
+            ctx.lineTo(p1.left.sx - rumbleW1, y1);
+            ctx.closePath();
+            ctx.fill();
+
+            // Right rumble
+            ctx.beginPath();
+            ctx.moveTo(p0.right.sx, y0);
+            ctx.lineTo(p0.right.sx + rumbleW0, y0);
+            ctx.lineTo(p1.right.sx + rumbleW1, y1);
+            ctx.lineTo(p1.right.sx, y1);
+            ctx.closePath();
+            ctx.fill();
+
+            // Lane lines (only on alternating segments for dashed effect)
+            if (alt) {
+                ctx.save();
+                ctx.shadowColor = CLR_LANE_LINE;
+                ctx.shadowBlur = 6;
+                ctx.fillStyle = CLR_LANE_LINE;
+                for (var ln = 1; ln < NUM_LANES; ln++) {
+                    var frac = ln / NUM_LANES;
+                    var lx0 = p0.left.sx + (p0.right.sx - p0.left.sx) * frac;
+                    var lx1 = p1.left.sx + (p1.right.sx - p1.left.sx) * frac;
+                    var lw0 = Math.max(1, rumbleW0 * 0.4);
+                    var lw1 = Math.max(1, rumbleW1 * 0.4);
+                    ctx.beginPath();
+                    ctx.moveTo(lx0 - lw0 / 2, y0);
+                    ctx.lineTo(lx0 + lw0 / 2, y0);
+                    ctx.lineTo(lx1 + lw1 / 2, y1);
+                    ctx.lineTo(lx1 - lw1 / 2, y1);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+                ctx.restore();
+            }
+
+            // Draw obstacles on this segment
+            for (var oi = 0; oi < obstacles.length; oi++) {
+                var ob = obstacles[oi];
+                if (ob.z >= p0.worldZ && ob.z < p0.worldZ + SEG_LENGTH) {
+                    var obProj = project(ob.x * ROAD_W * 0.5, 0, ob.z, camX, camY, camZ, sw, sh);
+                    if (obProj.scale > 0) {
+                        drawObstacleCar(obProj.sx, obProj.sy, obProj.scale);
+                    }
+                }
+            }
+        }
+
+        // --- Speed lines on sides ---
+        if (state === 'playing') {
+            var speedFrac = (speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED);
+            var numLines = Math.floor(speedFrac * 12) + 2;
+            ctx.strokeStyle = 'rgba(0,255,255,' + (speedFrac * 0.15 + 0.05) + ')';
+            ctx.lineWidth = 1;
+            for (var sli = 0; sli < numLines; sli++) {
+                var slx = (Math.sin(Date.now() * 0.01 + sli * 1.7) * 0.5 + 0.5);
+                var side = sli % 2 === 0 ? slx * sw * 0.15 : sw - slx * sw * 0.15;
+                var sly = horizonY + (sli / numLines) * (sh - horizonY) * 0.6;
+                var slLen = 20 + speedFrac * 50;
+                ctx.beginPath();
+                ctx.moveTo(side, sly);
+                ctx.lineTo(side, sly + slLen);
+                ctx.stroke();
+            }
+        }
+
+        // --- Particles ---
+        for (var pi = 0; pi < particles.length; pi++) {
+            var pp = particles[pi];
+            var a = pp.life / pp.maxLife;
+            if (pp.explosion) {
+                ctx.fillStyle = 'rgba(255,' + Math.floor(100 + 155 * a) + ',0,' + a + ')';
+            } else {
+                ctx.fillStyle = 'rgba(0,255,255,' + (a * 0.6) + ')';
+            }
+            ctx.beginPath();
+            ctx.arc(pp.sx, pp.sy, pp.r * a, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // --- Player car (always at bottom center-ish) ---
+        if (state === 'playing') {
+            drawPlayerCar(sw / 2 + playerX * sw * 0.2, sh * 0.68, sw);
+        }
+
+        // --- HUD ---
+        if (state === 'playing') drawHUD(sw, sh);
+
+        // --- Screens ---
+        if (state === 'menu') drawMenuScreen(sw, sh);
+        if (state === 'gameover') drawGameOverScreen(sw, sh);
+    }
+
+    // ============================================================
+    //  CAR DRAWING
+    // ============================================================
+    function drawPlayerCar(cx, bottomY, sw) {
+        var w = Math.min(60, sw * 0.15);
+        var h = w * 1.8;
+        var x = cx - w / 2;
+        var y = bottomY - h;
+
+        ctx.save();
+        ctx.shadowColor = CLR_PLAYER;
+        ctx.shadowBlur = 25;
+
+        // Main body
+        ctx.fillStyle = CLR_PLAYER;
+        fillRR(x + w * 0.1, y, w * 0.8, h, 6);
+
+        // Wider cabin
+        ctx.fillStyle = '#30dd12';
+        fillRR(x, y + h * 0.3, w, h * 0.35, 4);
+
+        // Windshield
+        ctx.fillStyle = 'rgba(0,0,0,0.4)';
+        fillRR(x + w * 0.2, y + h * 0.08, w * 0.6, h * 0.2, 3);
+
+        // Headlights
+        ctx.shadowColor = '#ffffff';
+        ctx.shadowBlur = 15;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x + w * 0.15, y + 2, w * 0.15, 4);
+        ctx.fillRect(x + w * 0.7, y + 2, w * 0.15, 4);
+
+        // Tail lights
+        ctx.shadowColor = '#ff0044';
+        ctx.shadowBlur = 12;
+        ctx.fillStyle = '#ff0044';
+        ctx.fillRect(x + w * 0.1, y + h - 5, w * 0.2, 4);
+        ctx.fillRect(x + w * 0.7, y + h - 5, w * 0.2, 4);
+
         ctx.restore();
     }
 
-    function fillRoundRect(x, y, w, h, r) {
-        if (typeof r === 'number') r = [r, r, r, r];
-        var tl = r[0], tr = r[1], br = r[2], bl = r[3];
+    function drawObstacleCar(cx, bottomY, scale) {
+        var baseW = 50;
+        var baseH = 90;
+        var w = baseW * scale * 0.6;
+        var h = baseH * scale * 0.6;
+        if (w < 2 || h < 2) return;
+
+        var x = cx - w / 2;
+        var y = bottomY - h;
+
+        ctx.save();
+        var color = '#ff4500';
+        ctx.shadowColor = color;
+        ctx.shadowBlur = Math.min(20, 15 * scale);
+
+        ctx.fillStyle = color;
+        fillRR(x + w * 0.1, y, w * 0.8, h, Math.max(1, 4 * scale));
+
+        ctx.fillStyle = '#dd3300';
+        fillRR(x, y + h * 0.3, w, h * 0.35, Math.max(1, 3 * scale));
+
+        // Windshield
+        ctx.fillStyle = 'rgba(0,0,0,0.35)';
+        fillRR(x + w * 0.2, y + h * 0.1, w * 0.6, h * 0.18, Math.max(1, 2 * scale));
+
+        // Tail lights (facing us)
+        ctx.shadowColor = '#ff0000';
+        ctx.shadowBlur = 10 * scale;
+        ctx.fillStyle = '#ff0000';
+        var tlw = Math.max(1, w * 0.2);
+        var tlh = Math.max(1, 3 * scale);
+        ctx.fillRect(x + w * 0.1, y + h - tlh - 1, tlw, tlh);
+        ctx.fillRect(x + w * 0.7, y + h - tlh - 1, tlw, tlh);
+
+        ctx.restore();
+    }
+
+    // Rounded rect helper
+    function fillRR(x, y, w, h, r) {
+        if (w <= 0 || h <= 0) return;
+        if (typeof r === 'number') r = Math.min(r, w / 2, h / 2);
         ctx.beginPath();
-        ctx.moveTo(x + tl, y);
-        ctx.lineTo(x + w - tr, y);
-        ctx.quadraticCurveTo(x + w, y, x + w, y + tr);
-        ctx.lineTo(x + w, y + h - br);
-        ctx.quadraticCurveTo(x + w, y + h, x + w - br, y + h);
-        ctx.lineTo(x + bl, y + h);
-        ctx.quadraticCurveTo(x, y + h, x, y + h - bl);
-        ctx.lineTo(x, y + tl);
-        ctx.quadraticCurveTo(x, y, x + tl, y);
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + w - r, y);
+        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+        ctx.lineTo(x + w, y + h - r);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        ctx.lineTo(x + r, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
         ctx.closePath();
         ctx.fill();
     }
 
-    function drawCar(x, y, w, h, color) {
-        drawGlow(color, 18, function() {
-            ctx.fillStyle = color;
-            var bx = x - w / 2, by = y;
-            fillRoundRect(bx + 4, by, w - 8, h, [6, 6, 4, 4]);
-            fillRoundRect(bx, by + h * 0.25, w, h * 0.45, 4);
-            ctx.fillStyle = 'rgba(0,0,0,0.35)';
-            fillRoundRect(bx + 8, by + 8, w - 16, h * 0.22, 3);
-            ctx.fillStyle = '#fff';
-            ctx.fillRect(bx + 4, by + h - 6, 6, 4);
-            ctx.fillRect(bx + w - 10, by + h - 6, 6, 4);
-        });
+    // ============================================================
+    //  HUD — on-screen buttons
+    // ============================================================
+    function drawHUD(sw, sh) {
+        var btnW = Math.min(100, sw * 0.25);
+        var btnH = 60;
+        var gap = 20;
+        var bottomPad = 30;
+
+        // Position buttons
+        btnLeft.x = sw / 2 - btnW - gap / 2;
+        btnLeft.y = sh - btnH - bottomPad;
+        btnLeft.w = btnW;
+        btnLeft.h = btnH;
+
+        btnRight.x = sw / 2 + gap / 2;
+        btnRight.y = sh - btnH - bottomPad;
+        btnRight.w = btnW;
+        btnRight.h = btnH;
+
+        // Draw left button
+        drawButton(btnLeft, '\u25C0', btnLeft.pressed);
+        // Draw right button
+        drawButton(btnRight, '\u25B6', btnRight.pressed);
+
+        // Score
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 22px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(formatScore(score), sw / 2, 34);
+
+        // Speed
+        ctx.font = '13px monospace';
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        var mph = Math.round((speed / MAX_SPEED) * 200 + 40);
+        ctx.fillText(mph + ' MPH', sw / 2, 54);
     }
 
+    function drawButton(btn, label, pressed) {
+        ctx.save();
+        var alpha = pressed ? 0.5 : 0.25;
+        var glowColor = pressed ? '#00ffff' : '#8a2be2';
+
+        ctx.shadowColor = glowColor;
+        ctx.shadowBlur = pressed ? 20 : 10;
+        ctx.fillStyle = 'rgba(255,255,255,' + alpha + ')';
+        fillRR(btn.x, btn.y, btn.w, btn.h, 12);
+
+        // Border
+        ctx.strokeStyle = glowColor;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(btn.x + 12, btn.y);
+        ctx.lineTo(btn.x + btn.w - 12, btn.y);
+        ctx.quadraticCurveTo(btn.x + btn.w, btn.y, btn.x + btn.w, btn.y + 12);
+        ctx.lineTo(btn.x + btn.w, btn.y + btn.h - 12);
+        ctx.quadraticCurveTo(btn.x + btn.w, btn.y + btn.h, btn.x + btn.w - 12, btn.y + btn.h);
+        ctx.lineTo(btn.x + 12, btn.y + btn.h);
+        ctx.quadraticCurveTo(btn.x, btn.y + btn.h, btn.x, btn.y + btn.h - 12);
+        ctx.lineTo(btn.x, btn.y + 12);
+        ctx.quadraticCurveTo(btn.x, btn.y, btn.x + 12, btn.y);
+        ctx.closePath();
+        ctx.stroke();
+
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 28px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, btn.x + btn.w / 2, btn.y + btn.h / 2);
+        ctx.textBaseline = 'alphabetic';
+
+        ctx.restore();
+    }
+
+    // ============================================================
+    //  SCREENS
+    // ============================================================
     function formatScore(n) {
         var s = String(n);
         var result = '';
@@ -412,177 +800,100 @@ window.addEventListener('load', function() {
         return result;
     }
 
-    // --- Main draw ---
-    function draw() {
-        var cw = W(), ch = H();
-
-        // Clear
-        ctx.fillStyle = '#050508';
-        ctx.fillRect(0, 0, cw, ch);
-
-        // Road surface
-        ctx.fillStyle = CLR_ROAD;
-        ctx.fillRect(roadLeft, 0, roadW, ch);
-
-        // Road edges (glowing purple)
-        drawGlow(CLR_EDGE, 14, function() {
-            ctx.strokeStyle = CLR_EDGE;
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.moveTo(roadLeft, 0); ctx.lineTo(roadLeft, ch);
-            ctx.moveTo(roadRight, 0); ctx.lineTo(roadRight, ch);
-            ctx.stroke();
-        });
-
-        // Lane dashes (glowing blue)
-        drawGlow(CLR_LANE, 8, function() {
-            ctx.strokeStyle = CLR_LANE;
-            ctx.lineWidth = 2;
-            ctx.setLineDash([20, 20]);
-            ctx.lineDashOffset = -dashOffset;
-            for (var i = 1; i < NUM_LANES; i++) {
-                var lx = roadLeft + laneW * i;
-                ctx.beginPath();
-                ctx.moveTo(lx, 0);
-                ctx.lineTo(lx, ch);
-                ctx.stroke();
-            }
-            ctx.setLineDash([]);
-        });
-
-        // Speed lines
-        var i;
-        ctx.lineWidth = 1;
-        for (i = 0; i < speedLines.length; i++) {
-            var sl = speedLines[i];
-            ctx.strokeStyle = CLR_SPEED_LINE;
-            ctx.beginPath();
-            ctx.moveTo(sl.x, sl.y);
-            ctx.lineTo(sl.x, sl.y + sl.len);
-            ctx.stroke();
-        }
-
-        // Particles
-        for (i = 0; i < particles.length; i++) {
-            var p = particles[i];
-            var alpha = p.life / p.maxLife;
-            if (p.explosion) {
-                ctx.fillStyle = 'rgba(255,' + Math.floor(100 + 155 * alpha) + ',0,' + alpha + ')';
-            } else {
-                ctx.fillStyle = 'rgba(0,255,255,' + (alpha * 0.7) + ')';
-            }
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, p.r * alpha, 0, Math.PI * 2);
-            ctx.fill();
-        }
-
-        // Obstacles
-        for (i = 0; i < obstacles.length; i++) {
-            var o = obstacles[i];
-            drawCar(o.x, o.y, o.w, o.h, o.color);
-        }
-
-        // Player
-        if (state === 'playing') {
-            drawCar(player.x, player.y, player.w, player.h, CLR_PLAYER);
-        }
-
-        // HUD
-        if (state === 'playing') {
-            ctx.fillStyle = '#fff';
-            ctx.font = 'bold 20px monospace';
-            ctx.textAlign = 'center';
-            ctx.fillText(formatScore(score), cw / 2, 36);
-            ctx.font = '13px monospace';
-            ctx.fillStyle = 'rgba(255,255,255,0.5)';
-            var mph = Math.round((speed / MAX_SPEED) * 200 + 40);
-            ctx.fillText(mph + ' MPH', cw / 2, 56);
-        }
-
-        // Screens
-        if (state === 'menu') drawMenuScreen(cw, ch);
-        if (state === 'gameover') drawGameOverScreen(cw, ch);
-    }
-
-    function drawMenuScreen(cw, ch) {
-        ctx.fillStyle = 'rgba(0,0,0,0.65)';
-        ctx.fillRect(0, 0, cw, ch);
+    function drawMenuScreen(sw, sh) {
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(0, 0, sw, sh);
         ctx.textAlign = 'center';
 
-        // Title
-        drawGlow('#39ff14', 30, function() {
-            ctx.fillStyle = CLR_PLAYER;
-            ctx.font = 'bold 48px monospace';
-            ctx.fillText('NEON', cw / 2, ch * 0.32);
-            ctx.fillText('RACING', cw / 2, ch * 0.32 + 56);
-        });
+        ctx.save();
+        ctx.shadowColor = '#39ff14';
+        ctx.shadowBlur = 35;
+        ctx.fillStyle = CLR_PLAYER;
+        ctx.font = 'bold 52px monospace';
+        ctx.fillText('NEON', sw / 2, sh * 0.28);
+        ctx.fillText('RACING', sw / 2, sh * 0.28 + 60);
+        ctx.restore();
+
+        // Subtitle
+        ctx.save();
+        ctx.shadowColor = '#8a2be2';
+        ctx.shadowBlur = 12;
+        ctx.fillStyle = '#8a2be2';
+        ctx.font = '14px monospace';
+        ctx.fillText('CYBER EDITION', sw / 2, sh * 0.28 + 90);
+        ctx.restore();
 
         // Decorative line
-        drawGlow(CLR_EDGE, 10, function() {
-            ctx.strokeStyle = CLR_EDGE;
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.moveTo(cw / 2 - 80, ch * 0.32 + 75);
-            ctx.lineTo(cw / 2 + 80, ch * 0.32 + 75);
-            ctx.stroke();
-        });
+        ctx.save();
+        ctx.shadowColor = CLR_EDGE_GLOW;
+        ctx.shadowBlur = 10;
+        ctx.strokeStyle = CLR_EDGE_GLOW;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(sw / 2 - 90, sh * 0.28 + 105);
+        ctx.lineTo(sw / 2 + 90, sh * 0.28 + 105);
+        ctx.stroke();
+        ctx.restore();
 
-        // Prompt (pulsing)
         var pulse = 0.5 + 0.5 * Math.sin(Date.now() / 300);
         ctx.fillStyle = 'rgba(255,255,255,' + (0.5 + pulse * 0.5) + ')';
-        ctx.font = '22px monospace';
-        ctx.fillText('TAP TO RACE', cw / 2, ch * 0.55);
+        ctx.font = '24px monospace';
+        ctx.fillText('TAP TO RACE', sw / 2, sh * 0.55);
 
-        // High score
         if (highScore > 0) {
             ctx.fillStyle = 'rgba(255,255,255,0.4)';
             ctx.font = '14px monospace';
-            ctx.fillText('BEST: ' + formatScore(highScore), cw / 2, ch * 0.65);
+            ctx.fillText('BEST: ' + formatScore(highScore), sw / 2, sh * 0.65);
         }
 
-        // Controls hint
         ctx.fillStyle = 'rgba(255,255,255,0.3)';
         ctx.font = '12px monospace';
-        ctx.fillText('TAP LEFT / RIGHT TO STEER', cw / 2, ch * 0.78);
+        ctx.fillText('USE BUTTONS OR TAP SIDES', sw / 2, sh * 0.78);
     }
 
-    function drawGameOverScreen(cw, ch) {
-        ctx.fillStyle = 'rgba(0,0,0,0.7)';
-        ctx.fillRect(0, 0, cw, ch);
+    function drawGameOverScreen(sw, sh) {
+        ctx.fillStyle = 'rgba(0,0,0,0.65)';
+        ctx.fillRect(0, 0, sw, sh);
         ctx.textAlign = 'center';
 
-        drawGlow('#ff2222', 24, function() {
-            ctx.fillStyle = '#ff2222';
-            ctx.font = 'bold 42px monospace';
-            ctx.fillText('GAME OVER', cw / 2, ch * 0.30);
-        });
+        ctx.save();
+        ctx.shadowColor = '#ff2222';
+        ctx.shadowBlur = 28;
+        ctx.fillStyle = '#ff2222';
+        ctx.font = 'bold 44px monospace';
+        ctx.fillText('GAME OVER', sw / 2, sh * 0.28);
+        ctx.restore();
 
         ctx.fillStyle = '#fff';
-        ctx.font = 'bold 28px monospace';
-        ctx.fillText(formatScore(score), cw / 2, ch * 0.42);
+        ctx.font = 'bold 30px monospace';
+        ctx.fillText(formatScore(score), sw / 2, sh * 0.40);
         ctx.font = '14px monospace';
         ctx.fillStyle = 'rgba(255,255,255,0.5)';
-        ctx.fillText('SCORE', cw / 2, ch * 0.42 + 24);
+        ctx.fillText('SCORE', sw / 2, sh * 0.40 + 26);
 
-        drawGlow('#ffcc00', 10, function() {
-            ctx.fillStyle = '#ffcc00';
-            ctx.font = 'bold 20px monospace';
-            ctx.fillText('BEST: ' + formatScore(highScore), cw / 2, ch * 0.56);
-        });
+        ctx.save();
+        ctx.shadowColor = '#ffcc00';
+        ctx.shadowBlur = 12;
+        ctx.fillStyle = '#ffcc00';
+        ctx.font = 'bold 20px monospace';
+        ctx.fillText('BEST: ' + formatScore(highScore), sw / 2, sh * 0.54);
+        ctx.restore();
 
         if (score >= highScore && score > 0) {
             ctx.fillStyle = '#ffcc00';
             ctx.font = '14px monospace';
-            ctx.fillText('NEW RECORD!', cw / 2, ch * 0.56 + 24);
+            ctx.fillText('NEW RECORD!', sw / 2, sh * 0.54 + 26);
         }
 
         var pulse = 0.5 + 0.5 * Math.sin(Date.now() / 300);
         ctx.fillStyle = 'rgba(255,255,255,' + (0.5 + pulse * 0.5) + ')';
         ctx.font = '20px monospace';
-        ctx.fillText('TAP TO TRY AGAIN', cw / 2, ch * 0.72);
+        ctx.fillText('TAP TO TRY AGAIN', sw / 2, sh * 0.72);
     }
 
-    // --- Game loop with error display ---
+    // ============================================================
+    //  GAME LOOP
+    // ============================================================
     function loop() {
         requestAnimationFrame(loop);
         try {
@@ -590,16 +901,19 @@ window.addEventListener('load', function() {
             draw();
         } catch(e) {
             ctx.fillStyle = '#000';
-            ctx.fillRect(0, 0, W(), 80);
+            ctx.fillRect(0, 0, SW(), 80);
             ctx.fillStyle = '#ff0000';
-            ctx.font = '14px monospace';
+            ctx.font = '12px monospace';
             ctx.textAlign = 'left';
-            ctx.fillText('ERR: ' + e.message, 10, 30);
+            ctx.fillText('ERR: ' + e.message, 10, 20);
+            ctx.fillText(e.stack ? e.stack.split('\n')[1] : '', 10, 40);
         }
     }
 
     // --- Init ---
     resize();
+    buildRoad();
+    buildStars();
     window.addEventListener('resize', resize);
     requestAnimationFrame(loop);
 
