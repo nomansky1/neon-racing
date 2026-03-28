@@ -164,9 +164,8 @@ function initThree() {
 
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    renderer.shadowMap.enabled = false;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.2;
     document.body.insertBefore(renderer.domElement, document.body.firstChild);
@@ -183,14 +182,7 @@ function initThree() {
 
     dirLight = new THREE.DirectionalLight(0xffeedd, 0.8);
     dirLight.position.set(50, 80, 50);
-    dirLight.castShadow = true;
-    dirLight.shadow.mapSize.set(1024, 1024);
-    dirLight.shadow.camera.near = 1;
-    dirLight.shadow.camera.far = 300;
-    dirLight.shadow.camera.left = -100;
-    dirLight.shadow.camera.right = 100;
-    dirLight.shadow.camera.top = 100;
-    dirLight.shadow.camera.bottom = -100;
+    dirLight.castShadow = false;
     scene.add(dirLight);
 
     // Ground plane
@@ -199,13 +191,13 @@ function initThree() {
     var ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -0.15;
-    ground.receiveShadow = true;
+    // ground.receiveShadow = true;
     scene.add(ground);
     // store ref for day/night color changes
     ground.userData.isGround = true;
 
-    // Grid helper for neon feel
-    var grid = new THREE.GridHelper(2000, 200, 0x1a0033, 0x0a0015);
+    // Grid helper for neon feel (reduced for mobile perf)
+    var grid = new THREE.GridHelper(800, 40, 0x1a0033, 0x0a0015);
     grid.position.y = -0.05;
     scene.add(grid);
 
@@ -225,14 +217,14 @@ function initThree() {
 //  CLOUDS
 // ================================================================
 function createClouds() {
-    for (var i = 0; i < 25; i++) {
+    for (var i = 0; i < 10; i++) {
         var group = new THREE.Group();
         // Each cloud = cluster of spheres
-        var numPuffs = 3 + Math.floor(Math.random() * 5);
+        var numPuffs = 2 + Math.floor(Math.random() * 3);
         var cloudMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 });
         for (var p = 0; p < numPuffs; p++) {
-            var r = 8 + Math.random() * 15;
-            var puffGeo = new THREE.SphereGeometry(r, 7, 5);
+            var r = 10 + Math.random() * 15;
+            var puffGeo = new THREE.SphereGeometry(r, 5, 4);
             var puff = new THREE.Mesh(puffGeo, cloudMat.clone());
             puff.position.set((Math.random() - 0.5) * 30, (Math.random() - 0.5) * 5, (Math.random() - 0.5) * 15);
             puff.scale.y = 0.4 + Math.random() * 0.3;
@@ -308,16 +300,21 @@ function updateDayNight(dt) {
     dirLight.position.set(Math.cos(sunAngle) * 80, Math.sin(sunAngle) * 80 + 20, 50);
     dirLight.intensity = 0.2 + Math.max(0, Math.sin(sunAngle)) * 0.8;
 
-    // Cloud opacity based on time of day
-    var cloudOp = dayNightTime < 0.5 ? 0.15 + (0.25 - Math.abs(dayNightTime - 0.25)) * 1.0 : 0.08;
-    for (var i = 0; i < clouds.length; i++) {
-        var c = clouds[i];
-        c.traverse(function(child) {
-            if (child.material && child.material.opacity !== undefined) {
-                child.material.opacity = Math.min(0.45, cloudOp);
-                child.material.color = lerpColor(from.sky, 0xffffff, 0.7 + t * 0.3);
+    // Cloud opacity based on time of day (update only every ~10 frames)
+    if (!updateDayNight._fc) updateDayNight._fc = 0;
+    updateDayNight._fc++;
+    if (updateDayNight._fc % 10 === 0) {
+        var cloudOp = dayNightTime < 0.5 ? 0.15 + (0.25 - Math.abs(dayNightTime - 0.25)) * 1.0 : 0.08;
+        var cloudColor = lerpColor(from.sky, 0xffffff, 0.7 + t * 0.3);
+        for (var i = 0; i < clouds.length; i++) {
+            var c = clouds[i];
+            for (var ci = 0; ci < c.children.length; ci++) {
+                if (c.children[ci].material) {
+                    c.children[ci].material.opacity = Math.min(0.45, cloudOp);
+                    c.children[ci].material.color.copy(cloudColor);
+                }
             }
-        });
+        }
     }
 }
 
@@ -363,7 +360,7 @@ function generateTrack() {
 }
 
 function buildRoadMesh() {
-    var divisions = 600;
+    var divisions = 300;
     var geo = new THREE.BufferGeometry();
     var verts = [], uvs = [], indices = [], colors = [];
     var halfW = ROAD_WIDTH / 2;
@@ -406,7 +403,7 @@ function buildRoadMesh() {
     });
 
     var mesh = new THREE.Mesh(geo, roadMat);
-    mesh.receiveShadow = true;
+    // mesh.receiveShadow = true;
 
     // Add shoulder strips (lighter edges)
     for (var side = -1; side <= 1; side += 2) {
@@ -560,7 +557,7 @@ function addWindowGrid(bx, by, bz, bw, bh, bd, zone) {
 
         for (var r = 0; r < rows; r++) {
             for (var c = 0; c < cols; c++) {
-                if (Math.random() < 0.3) continue; // some windows dark
+                if (Math.random() < 0.55) continue; // many windows dark (perf)
                 var wGeo = new THREE.PlaneGeometry(winW * 0.7, winH * 0.6);
                 var wColor = wColors[Math.floor(Math.random() * wColors.length)];
                 var wMat = new THREE.MeshBasicMaterial({
@@ -590,7 +587,7 @@ function addWindowGrid(bx, by, bz, bw, bh, bd, zone) {
 }
 
 function placeBuildings() {
-    var numBuildings = 80;
+    var numBuildings = 40;
     for (var i = 0; i < numBuildings; i++) {
         var t = i / numBuildings;
         var pt = trackCurve.getPointAt(t);
@@ -616,7 +613,7 @@ function placeBuildings() {
         var mesh = new THREE.Mesh(geo, mat);
         var pos = pt.clone().addScaledVector(right, side * dist);
         mesh.position.set(pos.x, bh / 2, pos.z);
-        mesh.castShadow = true;
+        // mesh.castShadow = true;
         scene.add(mesh);
         buildings.push(mesh);
 
@@ -638,7 +635,7 @@ function placeBuildings() {
 }
 
 function placeTrackLights() {
-    var numLights = 40;
+    var numLights = 20;
     for (var i = 0; i < numLights; i++) {
         var t = i / numLights;
         var pt = trackCurve.getPointAt(t);
@@ -715,7 +712,7 @@ function buildCar(color, isPlayer) {
     lowerGeo.rotateX(-Math.PI / 2);
     var lower = new THREE.Mesh(lowerGeo, bodyMat);
     lower.position.y = 0.18;
-    lower.castShadow = true;
+    // lower.castShadow = true;
     group.add(lower);
 
     // --- Upper body / cabin (tapered) ---
@@ -731,7 +728,7 @@ function buildCar(color, isPlayer) {
     cabGeo.rotateX(-Math.PI / 2);
     var cabin = new THREE.Mesh(cabGeo, bodyMat);
     cabin.position.set(0, 0.53, -bLen * 0.04);
-    cabin.castShadow = true;
+    // cabin.castShadow = true;
     group.add(cabin);
 
     // --- Front hood (curved) ---
@@ -945,7 +942,7 @@ function buildCar(color, isPlayer) {
         }
 
         wheelGroup.position.set(wheelPositions[wi][0], wheelPositions[wi][1], wheelPositions[wi][2]);
-        wheelGroup.castShadow = true;
+        // wheelGroup.castShadow = true;
         group.add(wheelGroup);
         group.userData.wheels.push(wheelGroup);
     }
@@ -1115,7 +1112,7 @@ var particleMeshes = { exhaust: [], tire: [], spark: [], nosFlame: [] };
 function initParticlePool() {
     // Exhaust smoke
     var smokeGeo = new THREE.SphereGeometry(0.06, 4, 4);
-    for (var i = 0; i < 60; i++) {
+    for (var i = 0; i < 30; i++) {
         var mat = new THREE.MeshBasicMaterial({ color: 0x888888, transparent: true, opacity: 0 });
         var m = new THREE.Mesh(smokeGeo, mat);
         m.visible = false;
@@ -1125,7 +1122,7 @@ function initParticlePool() {
 
     // Tire smoke
     var tireGeo = new THREE.SphereGeometry(0.08, 4, 4);
-    for (var j = 0; j < 80; j++) {
+    for (var j = 0; j < 40; j++) {
         var tMat = new THREE.MeshBasicMaterial({ color: 0xaaaaaa, transparent: true, opacity: 0 });
         var tM = new THREE.Mesh(tireGeo, tMat);
         tM.visible = false;
@@ -1135,7 +1132,7 @@ function initParticlePool() {
 
     // Sparks
     var sparkGeo = new THREE.BoxGeometry(0.03, 0.03, 0.12);
-    for (var k = 0; k < 50; k++) {
+    for (var k = 0; k < 25; k++) {
         var sMat = new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 0 });
         var sM = new THREE.Mesh(sparkGeo, sMat);
         sM.visible = false;
@@ -1287,14 +1284,13 @@ function updateCar(car, dt, isPlayer) {
     lookTarget.y = car.position.y;
     car.lookAt(lookTarget);
 
-    // Car physics: body roll (tilt) when turning
+    // Car physics: body roll (tilt) when turning + pitch on accel/brake
+    // Use quaternion multiply so we don't corrupt lookAt orientation
     var steerDelta = ud.targetLaneOffset - ud.laneOffset;
-    var targetRoll = -steerDelta * 0.04 * Math.min(ud.speed / 20, 1); // roll into turn
+    var targetRoll = -steerDelta * 0.04 * Math.min(ud.speed / 20, 1);
     if (!ud.bodyRoll) ud.bodyRoll = 0;
     ud.bodyRoll += (targetRoll - ud.bodyRoll) * 0.1;
-    car.rotation.z = ud.bodyRoll;
 
-    // Pitch: nose dips on braking, rises on acceleration
     var targetPitch = 0;
     if (isPlayer) {
         if (input.brake && ud.speed > 3) targetPitch = 0.03;
@@ -1302,7 +1298,14 @@ function updateCar(car, dt, isPlayer) {
     }
     if (!ud.bodyPitch) ud.bodyPitch = 0;
     ud.bodyPitch += (targetPitch - ud.bodyPitch) * 0.08;
-    car.rotation.x += ud.bodyPitch;
+
+    // Apply roll and pitch via quaternion (preserves lookAt heading)
+    if (Math.abs(ud.bodyRoll) > 0.001 || Math.abs(ud.bodyPitch) > 0.001) {
+        var tiltQ = new THREE.Quaternion();
+        var tiltE = new THREE.Euler(ud.bodyPitch, 0, ud.bodyRoll, 'XYZ');
+        tiltQ.setFromEuler(tiltE);
+        car.quaternion.multiply(tiltQ);
+    }
 
     // Wheel spin
     if (ud.wheels) {
@@ -1565,8 +1568,8 @@ function drawMinimap() {
     mc.strokeStyle = 'rgba(138,43,226,0.5)';
     mc.lineWidth = 2;
     mc.beginPath();
-    for (var i = 0; i <= 100; i++) {
-        var t = i / 100;
+    for (var i = 0; i <= 50; i++) {
+        var t = i / 50;
         var pt = trackCurve.getPointAt(t);
         var mx = (pt.x / 500 + 0.5) * w;
         var my = (pt.z / 500 + 0.5) * h;
