@@ -76,7 +76,10 @@ function recalcLanes() {
 // --- Game state ---
 let state = 'menu';   // menu | playing | gameover
 let score, speed, spawnTimer, spawnInterval;
-let player, obstacles, particles, speedLines;
+let player = null;
+let obstacles = [];
+let particles = [];
+let speedLines = [];
 let highScore = parseInt(localStorage.getItem('neonRacingHigh')) || 0;
 let dashOffset = 0;    // animated lane dashes
 let lastTime = 0;
