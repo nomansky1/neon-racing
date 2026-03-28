@@ -338,24 +338,36 @@ function drawGlow(color, blur, fn) {
     ctx.restore();
 }
 
+// Polyfill-safe rounded rectangle (older Safari/Android lack roundRect)
+function fillRoundRect(x, y, w, h, r) {
+    if (typeof r === 'number') r = [r, r, r, r];
+    const [tl, tr, br, bl] = r;
+    ctx.beginPath();
+    ctx.moveTo(x + tl, y);
+    ctx.lineTo(x + w - tr, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + tr);
+    ctx.lineTo(x + w, y + h - br);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - br, y + h);
+    ctx.lineTo(x + bl, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - bl);
+    ctx.lineTo(x, y + tl);
+    ctx.quadraticCurveTo(x, y, x + tl, y);
+    ctx.closePath();
+    ctx.fill();
+}
+
 function drawCar(x, y, w, h, color) {
     // Car body with glow
     drawGlow(color, 18, () => {
         ctx.fillStyle = color;
         // main body
         const bx = x - w / 2, by = y;
-        ctx.beginPath();
-        ctx.roundRect(bx + 4, by, w - 8, h, [6, 6, 4, 4]);
-        ctx.fill();
+        fillRoundRect(bx + 4, by, w - 8, h, [6, 6, 4, 4]);
         // wider middle section
-        ctx.beginPath();
-        ctx.roundRect(bx, by + h * 0.25, w, h * 0.45, 4);
-        ctx.fill();
+        fillRoundRect(bx, by + h * 0.25, w, h * 0.45, 4);
         // windshield
         ctx.fillStyle = 'rgba(0,0,0,0.35)';
-        ctx.beginPath();
-        ctx.roundRect(bx + 8, by + 8, w - 16, h * 0.22, 3);
-        ctx.fill();
+        fillRoundRect(bx + 8, by + 8, w - 16, h * 0.22, 3);
         // rear lights
         ctx.fillStyle = '#fff';
         ctx.fillRect(bx + 4, by + h - 6, 6, 4);
